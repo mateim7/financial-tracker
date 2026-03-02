@@ -105,12 +105,56 @@ function EventRow({ event, isNew }) {
             <span style={{ fontSize: 11, color: "#48484a", marginLeft: "auto", whiteSpace: "nowrap" }}>{timeAgo}</span>
           </div>
           <p style={{ margin: 0, fontSize: 14, lineHeight: 1.45, color: severity === "critical" ? "#f5f5f7" : severity === "low" ? "#8e8e93" : "#d1d1d6", fontWeight: severity === "critical" ? 600 : 400 }}>
-            {event.headline}
+            {event.url
+              ? <a href={event.url} target="_blank" rel="noopener noreferrer" style={{ color: "inherit", textDecoration: "none" }}
+                  onMouseEnter={e => e.currentTarget.style.textDecoration = "underline"}
+                  onMouseLeave={e => e.currentTarget.style.textDecoration = "none"}>
+                  {event.headline}
+                </a>
+              : event.headline}
           </p>
           {event.brief && (
-            <p style={{ margin: "4px 0 0", fontSize: 12, color: "#8e8e93", lineHeight: 1.4, fontStyle: "italic" }}>
+            <p style={{ margin: "6px 0 0", fontSize: 12, color: "#8e8e93", lineHeight: 1.4, fontStyle: "italic" }}>
               {event.brief}
             </p>
+          )}
+          {event.reasoning && event.reasoning.length > 0 && (
+            <ul style={{ margin: "6px 0 0", padding: "0 0 0 14px", listStyle: "none" }}>
+              {event.reasoning.map((r, i) => (
+                <li key={i} style={{ fontSize: 12, color: "#aeaeb2", lineHeight: 1.45, marginBottom: 2, display: "flex", gap: 6 }}>
+                  <span style={{ color: "#636366", flexShrink: 0 }}>›</span>
+                  <span>{r}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {(event.risk || event.time_horizon) && (
+            <div style={{ display: "flex", gap: 10, marginTop: 6, flexWrap: "wrap", alignItems: "center" }}>
+              {event.time_horizon && (
+                <span style={{ fontSize: 10, padding: "2px 7px", borderRadius: 3,
+                  background: "rgba(10,132,255,0.1)", color: "#0a84ff",
+                  border: "1px solid rgba(10,132,255,0.2)", fontFamily: "'JetBrains Mono', monospace" }}>
+                  ⏱ {event.time_horizon}
+                </span>
+              )}
+              {event.risk && (
+                <span style={{ fontSize: 11, color: "#ff9f0a", lineHeight: 1.35 }}>
+                  ⚠ {event.risk}
+                </span>
+              )}
+            </div>
+          )}
+          {event.correlated_moves && event.correlated_moves.length > 0 && (
+            <div style={{ display: "flex", gap: 5, marginTop: 6, alignItems: "center", flexWrap: "wrap" }}>
+              <span style={{ fontSize: 10, color: "#48484a", fontFamily: "'JetBrains Mono', monospace" }}>MOVES WITH:</span>
+              {event.correlated_moves.map(t => (
+                <span key={t} style={{ fontSize: 10, padding: "1px 6px", borderRadius: 3,
+                  background: "rgba(99,99,102,0.15)", color: "#8e8e93",
+                  border: "1px solid rgba(99,99,102,0.25)", fontFamily: "'JetBrains Mono', monospace" }}>
+                  {t}
+                </span>
+              ))}
+            </div>
           )}
           {event.buy_signal && (
             <div style={{ marginTop: 6, display: "inline-flex", alignItems: "center", gap: 6,

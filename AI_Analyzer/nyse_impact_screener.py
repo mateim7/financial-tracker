@@ -66,6 +66,11 @@ async def broadcast_event(event):
         "brief":              event.brief,
         "buy_signal":         event.buy_signal,
         "buy_confidence":     event.buy_confidence,
+        "reasoning":          event.reasoning,
+        "risk":               event.risk,
+        "time_horizon":       event.time_horizon,
+        "correlated_moves":   event.correlated_moves,
+        "url":                event.url,
         "stock_availability": event.stock_availability,
         "price_data":         event.price_data,
     }
@@ -118,19 +123,61 @@ async def start_http_server(db: "EventDatabase"):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 RSS_SOURCES = [
-    {"url": "https://www.cnbc.com/id/100003114/device/rss/rss.html", "name": "CNBC", "tier": 2},
-    {"url": "https://www.cnbc.com/id/10001147/device/rss/rss.html", "name": "CNBC Markets", "tier": 2},
-    {"url": "https://www.cnbc.com/id/20910258/device/rss/rss.html", "name": "CNBC Finance", "tier": 2},
-    {"url": "https://feeds.marketwatch.com/marketwatch/topstories/", "name": "MarketWatch", "tier": 2},
-    {"url": "https://www.investing.com/rss/news.rss", "name": "Investing.com", "tier": 2},
-    {"url": "https://feeds.content.dowjones.io/public/rss/mw_topstories", "name": "MarketWatch DJ", "tier": 1},
-    {"url": "https://www.ft.com/rss/home", "name": "Financial Times", "tier": 1},
-    {"url": "https://finance.yahoo.com/news/rssindex", "name": "Yahoo Finance", "tier": 2},
-    {"url": "https://www.thestreet.com/rss/main.xml", "name": "TheStreet", "tier": 2},
-    {"url": "https://seekingalpha.com/feed.xml", "name": "Seeking Alpha", "tier": 2},
-    {"url": "https://www.zacks.com/rss/newsroom.php", "name": "Zacks", "tier": 2},
-    {"url": "https://www.fool.com/feeds/foolwatch/", "name": "Motley Fool", "tier": 2},
-    {"url": "https://feeds.barrons.com/barrons/articles", "name": "Barron's", "tier": 1},
+    # ── Tier 1: Institutional / Wire Services ───────────────────────────────
+    {"url": "https://feeds.content.dowjones.io/public/rss/mw_topstories",     "name": "MarketWatch DJ",    "tier": 1},
+    {"url": "https://feeds.a.dj.com/rss/WSJcomUSBusiness.xml",                "name": "WSJ Business",      "tier": 1},
+    {"url": "https://feeds.a.dj.com/rss/RSSMarketsMain.xml",                  "name": "WSJ Markets",       "tier": 1},
+    # Note: FT requires SSL workaround (handled below); Reuters/AP/Barron's killed free RSS
+
+    # ── Tier 2: Professional Financial Media ─────────────────────────────────
+    {"url": "https://www.cnbc.com/id/100003114/device/rss/rss.html",          "name": "CNBC",              "tier": 2},
+    {"url": "https://www.cnbc.com/id/10001147/device/rss/rss.html",           "name": "CNBC Markets",      "tier": 2},
+    {"url": "https://www.cnbc.com/id/20910258/device/rss/rss.html",           "name": "CNBC Finance",      "tier": 2},
+    {"url": "https://www.cnbc.com/id/15839135/device/rss/rss.html",           "name": "CNBC Tech",         "tier": 2},
+    {"url": "https://feeds.marketwatch.com/marketwatch/topstories/",          "name": "MarketWatch",       "tier": 2},
+    {"url": "https://www.investing.com/rss/news.rss",                         "name": "Investing.com",     "tier": 2},
+    {"url": "https://finance.yahoo.com/news/rssindex",                        "name": "Yahoo Finance",     "tier": 2},
+    {"url": "https://finance.yahoo.com/rss/2.0/headline?s=%5EGSPC",          "name": "Yahoo S&P News",    "tier": 2},
+    {"url": "https://www.thestreet.com/rss/main.xml",                         "name": "TheStreet",         "tier": 2},
+    {"url": "https://seekingalpha.com/feed.xml",                              "name": "Seeking Alpha",     "tier": 2},
+    {"url": "https://www.zacks.com/rss/newsroom.php",                         "name": "Zacks",             "tier": 2},
+    {"url": "https://www.fool.com/feeds/foolwatch/",                          "name": "Motley Fool",       "tier": 2},
+    {"url": "https://www.benzinga.com/feed",                                  "name": "Benzinga",          "tier": 2},
+    {"url": "https://www.nasdaq.com/feed/rssoutbound?category=Markets",       "name": "Nasdaq Markets",    "tier": 2},
+    {"url": "https://www.nasdaq.com/feed/rssoutbound?category=Earnings",      "name": "Nasdaq Earnings",   "tier": 2},
+    {"url": "https://feeds.businesswire.com/rss/home/?rss=G1&rssid=1",       "name": "Business Wire",     "tier": 2},
+    {"url": "https://www.globenewswire.com/RssFeed/subjectcode/17-Financial%20Markets", "name": "GlobeNewsWire", "tier": 2},
+    {"url": "https://www.prnewswire.com/rss/news-releases-list.rss",          "name": "PR Newswire",       "tier": 2},
+]
+
+# ── Per-ticker Yahoo Finance RSS — watches these stocks specifically ─────────
+# These feed direct company news straight into the screener
+_TICKER_WATCH = [
+    # Mega-cap (Big 7)
+    "AAPL", "MSFT", "GOOGL", "META", "AMZN", "NVDA", "TSLA",
+    # Semis
+    "AMD", "INTC", "TSM", "AVGO", "QCOM", "ARM", "MU", "ASML",
+    # AI / Cloud / SaaS
+    "PLTR", "CRWD", "PANW", "NET", "SNOW", "DDOG", "NOW", "CRM", "ORCL",
+    # Crypto-adjacent (high volatility)
+    "COIN", "MSTR", "RIOT", "MARA", "HOOD", "SOFI",
+    # Financials
+    "JPM", "BAC", "GS", "MS", "V", "MA", "PYPL", "SQ", "SCHW",
+    # Healthcare / Pharma
+    "LLY", "MRNA", "NVO", "ABBV", "UNH", "REGN", "VRTX",
+    # Energy
+    "XOM", "CVX", "OXY", "DVN",
+    # Consumer / Media
+    "NFLX", "DIS", "NKE", "SBUX", "MCD", "AMZN",
+    # EVs
+    "RIVN", "LCID", "GM", "F",
+    # Popular Revolut trades
+    "SMCI", "SHOP", "SNAP", "RBLX", "LYFT", "DASH", "ROKU",
+]
+RSS_SOURCES += [
+    {"url": f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={t}&region=US&lang=en-US",
+     "name": f"Yahoo/{t}", "tier": 2}
+    for t in _TICKER_WATCH
 ]
 
 class RSSFeed:
@@ -146,7 +193,8 @@ class RSSFeed:
         cutoff = time.time() - 86400  # only articles from last 24 hours
         new_items = []
         headers = {"User-Agent": "Mozilla/5.0 (compatible; FinanceScreener/1.0)"}
-        async with aiohttp.ClientSession(headers=headers) as session:
+        connector = aiohttp.TCPConnector(ssl=False)  # skip cert verify (Windows root CA issue)
+        async with aiohttp.ClientSession(headers=headers, connector=connector) as session:
             for source in RSS_SOURCES:
                 try:
                     async with session.get(source["url"], timeout=aiohttp.ClientTimeout(total=10)) as resp:
@@ -174,11 +222,12 @@ class RSSFeed:
                             "source_tier": source["tier"],
                             "headline": headline,
                             "body": entry.get("summary", entry.get("description", "")),
+                            "link": entry.get("link", ""),
                         })
                 except Exception as e:
                     print(f"  [RSS] Failed to fetch {source['name']}: {e}")
         self._recent_articles.extend(new_items)
-        self._recent_articles = self._recent_articles[-300:]
+        self._recent_articles = self._recent_articles[-600:]
         return new_items
 
 
@@ -302,6 +351,11 @@ class ScoredEvent:
     brief: str = ""
     buy_signal: str = ""
     buy_confidence: int = 0
+    reasoning: list[str] = field(default_factory=list)
+    risk: str = ""
+    time_horizon: str = ""
+    correlated_moves: list[str] = field(default_factory=list)
+    url: str = ""
     stock_availability: dict = field(default_factory=dict)
     price_data: dict = field(default_factory=dict)
     latency_ms: float = 0.0
@@ -331,10 +385,12 @@ class ClaudeScorer:
             return scored
 
         valid_types = [e.value for e in EventType]
+        tickers_str = ", ".join(scored.affected_tickers) if scored.affected_tickers else "MACRO"
         prompt = f"""You are a financial news analyst. Analyze this news headline and return ONLY a JSON object.
 
 Headline: {headline}
-Body: {body[:300] if body else "N/A"}
+Body: {body[:400] if body else "N/A"}
+Affected tickers: {tickers_str}
 
 Current automated scoring:
 - event_type: {scored.event_type.value}
@@ -348,7 +404,7 @@ Return JSON with these exact fields:
   "sentiment": float from -1.0 to 1.0,
   "impact_score": integer from 1 to 100,
   "direction": "BULLISH" or "BEARISH" or "NEUTRAL",
-  "brief": one sentence explaining the market impact,
+  "brief": one sentence summary of the market impact,
   "buy_signal": "BUY" or "HOLD" or "SELL",
   "buy_confidence": integer from 1 to 100. Be precise and granular — every value from 1 to 100 is valid. Do NOT round to multiples of 5 or 10. Think carefully and pick the exact number that reflects your conviction. Scale:
     1-10: extremely low conviction, near noise
@@ -361,14 +417,18 @@ Return JSON with these exact fields:
     85-94: high confidence, strong opportunity
     95-99: very high conviction, near certain
     100: absolute certainty (reserve only for unambiguous catalysts like FDA approval of blockbuster drug)
+  "reasoning": array of 2-3 short strings, each one specific reason why this is a BUY/SELL/HOLD. Be concrete — mention numbers, catalysts, or comparisons. E.g. ["Revenue beat of 12% vs estimates signals demand inflection", "Guidance raised — rare for this sector in current macro environment"],
+  "risk": one sentence on the single biggest risk that could invalidate this signal,
+  "time_horizon": one of "intraday" or "swing (1-3d)" or "medium-term (1-4w)",
+  "correlated_moves": array of up to 4 ticker strings (beyond the primary tickers) that are likely to move in sympathy or inverse — e.g. sector peers, suppliers, competitors. Only include real NYSE/NASDAQ tickers.
 }}
 
-For buy_signal and buy_confidence: assess whether this news creates a buying opportunity for the affected stocks. Consider short-term price impact, fundamental change, magnitude, and risk. Be precise — use the full 1-100 scale, not just round numbers. Only correct other scoring fields where automated scoring is clearly wrong. Return valid JSON only."""
+Only correct other scoring fields where automated scoring is clearly wrong. Return valid JSON only."""
 
         try:
             response = self.client.messages.create(
                 model="claude-sonnet-4-6",
-                max_tokens=300,
+                max_tokens=500,
                 messages=[{"role": "user", "content": prompt}]
             )
             text = response.content[0].text.strip()
@@ -392,6 +452,14 @@ For buy_signal and buy_confidence: assess whether this news creates a buying opp
                 scored.buy_signal = data["buy_signal"]
             if isinstance(data.get("buy_confidence"), (int, float)):
                 scored.buy_confidence = max(0, min(100, int(data["buy_confidence"])))
+            if isinstance(data.get("reasoning"), list):
+                scored.reasoning = [str(r) for r in data["reasoning"][:3]]
+            if data.get("risk"):
+                scored.risk = str(data["risk"])
+            if data.get("time_horizon"):
+                scored.time_horizon = str(data["time_horizon"])
+            if isinstance(data.get("correlated_moves"), list):
+                scored.correlated_moves = [str(t) for t in data["correlated_moves"][:4]]
 
         except Exception as e:
             print(f"  [Claude] Scoring error: {e}")
@@ -554,15 +622,17 @@ class EventDatabase:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# SECTION 2: NYSE REFERENCE DATA — 85+ TICKERS, 16 SECTORS
+# SECTION 2: NYSE REFERENCE DATA — 300+ TICKERS, 20 SECTORS
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class NYSEReferenceDB:
     """
     Comprehensive in-memory ticker resolution database.
-    Covers: Semiconductors, Energy (upstream/midstream/downstream), Financials,
-    Healthcare/Pharma/Biotech, Defense/Aerospace, Industrials, Technology,
-    Consumer, Utilities, REITs, Materials, Transportation, Telecom, and more.
+    Covers: Semiconductors, Mega-cap Tech, Cloud/SaaS, Cybersecurity, Crypto,
+    Energy (upstream/midstream/downstream/refining), Financials, Fintech,
+    Healthcare/Pharma/Biotech, Defense/Aerospace, Industrials, Autos/EVs,
+    Consumer, Airlines, Utilities, REITs, Materials, Transportation, Telecom,
+    and Broad Market ETFs.
 
     Production version uses SQLite FTS5 for fuzzy matching + Redis hot cache.
     """
@@ -775,6 +845,392 @@ class NYSEReferenceDB:
                      "sub_sector": "Telecom/Wireless", "beta_30d": 0.6},
             "TMUS": {"name": "T-Mobile", "sector": "Telecom", "mcap": "large", "etf": "XLC",
                      "sub_sector": "Telecom/Wireless", "beta_30d": 0.7},
+
+            # ── MEGA-CAP TECH (Big 7) ───────────────────────────────────────
+            "AAPL": {"name": "Apple", "sector": "Technology", "mcap": "mega", "etf": "XLK",
+                     "sub_sector": "Consumer Electronics/Software", "beta_30d": 1.2},
+            "MSFT": {"name": "Microsoft", "sector": "Technology", "mcap": "mega", "etf": "XLK",
+                     "sub_sector": "Cloud/Enterprise Software", "beta_30d": 1.1},
+            "GOOGL": {"name": "Alphabet", "sector": "Communication", "mcap": "mega", "etf": "XLC",
+                      "sub_sector": "Search/Cloud/AI", "beta_30d": 1.2},
+            "GOOG":  {"name": "Alphabet (Class C)", "sector": "Communication", "mcap": "mega", "etf": "XLC",
+                      "sub_sector": "Search/Cloud/AI", "beta_30d": 1.2},
+            "META":  {"name": "Meta Platforms", "sector": "Communication", "mcap": "mega", "etf": "XLC",
+                      "sub_sector": "Social Media/AI", "beta_30d": 1.4},
+            "AMZN": {"name": "Amazon", "sector": "Consumer Disc.", "mcap": "mega", "etf": "XLY",
+                     "sub_sector": "E-Commerce/Cloud", "beta_30d": 1.3},
+            "NFLX": {"name": "Netflix", "sector": "Communication", "mcap": "large", "etf": "XLC",
+                     "sub_sector": "Streaming", "beta_30d": 1.5},
+            "TSLA": {"name": "Tesla", "sector": "Consumer Disc.", "mcap": "mega", "etf": "XLY",
+                     "sub_sector": "EV/Autonomous", "beta_30d": 2.0},
+
+            # ── MORE TECHNOLOGY / SOFTWARE ──────────────────────────────────
+            "ADBE": {"name": "Adobe", "sector": "Technology", "mcap": "large", "etf": "XLK",
+                     "sub_sector": "Creative/AI Software", "beta_30d": 1.3},
+            "INTU": {"name": "Intuit", "sector": "Technology", "mcap": "large", "etf": "XLK",
+                     "sub_sector": "Financial Software", "beta_30d": 1.2},
+            "SNPS": {"name": "Synopsys", "sector": "Technology", "mcap": "large", "etf": "XLK",
+                     "sub_sector": "EDA Software", "beta_30d": 1.3},
+            "CDNS": {"name": "Cadence Design", "sector": "Technology", "mcap": "large", "etf": "XLK",
+                     "sub_sector": "EDA Software", "beta_30d": 1.3},
+            "WDAY": {"name": "Workday", "sector": "Technology", "mcap": "large", "etf": "IGV",
+                     "sub_sector": "Cloud/HR Software", "beta_30d": 1.2},
+            "TEAM": {"name": "Atlassian", "sector": "Technology", "mcap": "large", "etf": "IGV",
+                     "sub_sector": "Cloud/Dev Tools", "beta_30d": 1.4},
+            "HUBS": {"name": "HubSpot", "sector": "Technology", "mcap": "large", "etf": "IGV",
+                     "sub_sector": "Cloud/CRM", "beta_30d": 1.3},
+            "UBER": {"name": "Uber", "sector": "Technology", "mcap": "large", "etf": "XLK",
+                     "sub_sector": "Ride-Sharing/Logistics", "beta_30d": 1.5},
+
+            # ── CYBERSECURITY ───────────────────────────────────────────────
+            "PANW": {"name": "Palo Alto Networks", "sector": "Technology", "mcap": "large", "etf": "CIBR",
+                     "sub_sector": "Cybersecurity", "beta_30d": 1.4},
+            "CRWD": {"name": "CrowdStrike", "sector": "Technology", "mcap": "large", "etf": "CIBR",
+                     "sub_sector": "Cybersecurity/EDR", "beta_30d": 1.6},
+            "FTNT": {"name": "Fortinet", "sector": "Technology", "mcap": "large", "etf": "CIBR",
+                     "sub_sector": "Cybersecurity/Firewall", "beta_30d": 1.3},
+            "ZS":   {"name": "Zscaler", "sector": "Technology", "mcap": "large", "etf": "CIBR",
+                     "sub_sector": "Cloud Security", "beta_30d": 1.6},
+            "S":    {"name": "SentinelOne", "sector": "Technology", "mcap": "mid", "etf": "CIBR",
+                     "sub_sector": "Cybersecurity/AI", "beta_30d": 1.8},
+
+            # ── CLOUD / DATA ────────────────────────────────────────────────
+            "SNOW": {"name": "Snowflake", "sector": "Technology", "mcap": "large", "etf": "WCLD",
+                     "sub_sector": "Cloud Data Platform", "beta_30d": 1.7},
+            "DDOG": {"name": "Datadog", "sector": "Technology", "mcap": "large", "etf": "WCLD",
+                     "sub_sector": "Cloud Monitoring", "beta_30d": 1.6},
+            "NET":  {"name": "Cloudflare", "sector": "Technology", "mcap": "large", "etf": "WCLD",
+                     "sub_sector": "Cloud Networking/Security", "beta_30d": 1.7},
+            "MDB":  {"name": "MongoDB", "sector": "Technology", "mcap": "large", "etf": "WCLD",
+                     "sub_sector": "Cloud Database", "beta_30d": 1.8},
+
+            # ── CRYPTO-ADJACENT ─────────────────────────────────────────────
+            "COIN": {"name": "Coinbase", "sector": "Financials", "mcap": "large", "etf": "BKCH",
+                     "sub_sector": "Crypto Exchange", "beta_30d": 3.0},
+            "MSTR": {"name": "MicroStrategy", "sector": "Technology", "mcap": "large", "etf": "BKCH",
+                     "sub_sector": "Bitcoin Treasury", "beta_30d": 3.5},
+            "RIOT": {"name": "Riot Platforms", "sector": "Technology", "mcap": "mid", "etf": "BKCH",
+                     "sub_sector": "Bitcoin Mining", "beta_30d": 3.2},
+            "MARA": {"name": "Marathon Digital", "sector": "Technology", "mcap": "mid", "etf": "BKCH",
+                     "sub_sector": "Bitcoin Mining", "beta_30d": 3.3},
+            "HOOD": {"name": "Robinhood", "sector": "Financials", "mcap": "mid", "etf": "BKCH",
+                     "sub_sector": "Retail Brokerage/Crypto", "beta_30d": 2.5},
+
+            # ── MORE BIOTECH / HEALTHCARE ───────────────────────────────────
+            "MRNA": {"name": "Moderna", "sector": "Healthcare", "mcap": "large", "etf": "IBB",
+                     "sub_sector": "mRNA Biotech", "beta_30d": 1.8},
+            "BNTX": {"name": "BioNTech", "sector": "Healthcare", "mcap": "large", "etf": "IBB",
+                     "sub_sector": "mRNA Biotech", "beta_30d": 1.7},
+            "REGN": {"name": "Regeneron", "sector": "Healthcare", "mcap": "large", "etf": "IBB",
+                     "sub_sector": "Biotech", "beta_30d": 0.8},
+            "VRTX": {"name": "Vertex Pharmaceuticals", "sector": "Healthcare", "mcap": "large", "etf": "IBB",
+                     "sub_sector": "Biotech/Rare Disease", "beta_30d": 0.8},
+            "BIIB": {"name": "Biogen", "sector": "Healthcare", "mcap": "large", "etf": "IBB",
+                     "sub_sector": "Biotech/Neurology", "beta_30d": 0.9},
+            "ISRG": {"name": "Intuitive Surgical", "sector": "Healthcare", "mcap": "mega", "etf": "IHI",
+                     "sub_sector": "Surgical Robotics", "beta_30d": 1.0},
+            "BSX":  {"name": "Boston Scientific", "sector": "Healthcare", "mcap": "large", "etf": "IHI",
+                     "sub_sector": "Medical Devices", "beta_30d": 1.0},
+            "MDT":  {"name": "Medtronic", "sector": "Healthcare", "mcap": "mega", "etf": "IHI",
+                     "sub_sector": "Medical Devices", "beta_30d": 0.7},
+            "CVS":  {"name": "CVS Health", "sector": "Healthcare", "mcap": "large", "etf": "XLV",
+                     "sub_sector": "Pharmacy/MCO", "beta_30d": 0.7},
+            "CI":   {"name": "Cigna", "sector": "Healthcare", "mcap": "large", "etf": "XLV",
+                     "sub_sector": "Managed Care", "beta_30d": 0.7},
+            "HUM":  {"name": "Humana", "sector": "Healthcare", "mcap": "large", "etf": "XLV",
+                     "sub_sector": "Managed Care", "beta_30d": 0.8},
+            "DXCM": {"name": "Dexcom", "sector": "Healthcare", "mcap": "large", "etf": "IHI",
+                     "sub_sector": "CGM/Diabetes Tech", "beta_30d": 1.4},
+            "NVO":  {"name": "Novo Nordisk", "sector": "Healthcare", "mcap": "mega", "etf": "XLV",
+                     "sub_sector": "Diabetes/Obesity Pharma", "beta_30d": 0.8},
+
+            # ── MORE FINANCIALS ─────────────────────────────────────────────
+            "AXP":  {"name": "American Express", "sector": "Financials", "mcap": "mega", "etf": "XLF",
+                     "sub_sector": "Payments/Cards", "beta_30d": 1.1},
+            "PYPL": {"name": "PayPal", "sector": "Financials", "mcap": "large", "etf": "XLF",
+                     "sub_sector": "Digital Payments", "beta_30d": 1.5},
+            "SQ":   {"name": "Block (Square)", "sector": "Financials", "mcap": "large", "etf": "FINX",
+                     "sub_sector": "Fintech/Payments", "beta_30d": 2.0},
+            "SCHW": {"name": "Charles Schwab", "sector": "Financials", "mcap": "large", "etf": "XLF",
+                     "sub_sector": "Retail Brokerage", "beta_30d": 1.2},
+            "USB":  {"name": "US Bancorp", "sector": "Financials", "mcap": "large", "etf": "KRE",
+                     "sub_sector": "Regional Banks", "beta_30d": 1.0},
+            "PNC":  {"name": "PNC Financial", "sector": "Financials", "mcap": "large", "etf": "KRE",
+                     "sub_sector": "Regional Banks", "beta_30d": 1.0},
+            "TFC":  {"name": "Truist Financial", "sector": "Financials", "mcap": "large", "etf": "KRE",
+                     "sub_sector": "Regional Banks", "beta_30d": 1.1},
+            "SPGI": {"name": "S&P Global", "sector": "Financials", "mcap": "mega", "etf": "XLF",
+                     "sub_sector": "Financial Data/Ratings", "beta_30d": 1.0},
+            "MCO":  {"name": "Moody's", "sector": "Financials", "mcap": "large", "etf": "XLF",
+                     "sub_sector": "Credit Ratings", "beta_30d": 1.0},
+            "ICE":  {"name": "Intercontinental Exchange", "sector": "Financials", "mcap": "large", "etf": "XLF",
+                     "sub_sector": "Exchanges", "beta_30d": 0.9},
+            "CME":  {"name": "CME Group", "sector": "Financials", "mcap": "large", "etf": "XLF",
+                     "sub_sector": "Derivatives Exchange", "beta_30d": 0.8},
+            "KKR":  {"name": "KKR & Co", "sector": "Financials", "mcap": "large", "etf": "XLF",
+                     "sub_sector": "Private Equity", "beta_30d": 1.3},
+            "APO":  {"name": "Apollo Global", "sector": "Financials", "mcap": "large", "etf": "XLF",
+                     "sub_sector": "Private Equity/Credit", "beta_30d": 1.3},
+
+            # ── AUTOS / EVs ─────────────────────────────────────────────────
+            "GM":   {"name": "General Motors", "sector": "Consumer Disc.", "mcap": "large", "etf": "XLY",
+                     "sub_sector": "Legacy Auto/EV", "beta_30d": 1.2},
+            "F":    {"name": "Ford Motor", "sector": "Consumer Disc.", "mcap": "large", "etf": "XLY",
+                     "sub_sector": "Legacy Auto/EV", "beta_30d": 1.3},
+            "RIVN": {"name": "Rivian", "sector": "Consumer Disc.", "mcap": "mid", "etf": "XLY",
+                     "sub_sector": "EV Startup", "beta_30d": 2.5},
+            "LCID": {"name": "Lucid Motors", "sector": "Consumer Disc.", "mcap": "small", "etf": "XLY",
+                     "sub_sector": "EV Startup", "beta_30d": 2.8},
+
+            # ── MORE CONSUMER DISC ──────────────────────────────────────────
+            "TGT":  {"name": "Target", "sector": "Consumer Disc.", "mcap": "large", "etf": "XLY",
+                     "sub_sector": "Big Box Retail", "beta_30d": 0.9},
+            "LOW":  {"name": "Lowe's", "sector": "Consumer Disc.", "mcap": "large", "etf": "XLY",
+                     "sub_sector": "Home Improvement", "beta_30d": 1.0},
+            "TJX":  {"name": "TJX Companies", "sector": "Consumer Disc.", "mcap": "mega", "etf": "XLY",
+                     "sub_sector": "Off-Price Retail", "beta_30d": 0.8},
+            "BKNG": {"name": "Booking Holdings", "sector": "Consumer Disc.", "mcap": "mega", "etf": "XLY",
+                     "sub_sector": "Online Travel", "beta_30d": 1.2},
+            "ABNB": {"name": "Airbnb", "sector": "Consumer Disc.", "mcap": "large", "etf": "XLY",
+                     "sub_sector": "Online Travel", "beta_30d": 1.5},
+            "DKNG": {"name": "DraftKings", "sector": "Consumer Disc.", "mcap": "mid", "etf": "XLY",
+                     "sub_sector": "Sports Betting", "beta_30d": 2.2},
+            "MGM":  {"name": "MGM Resorts", "sector": "Consumer Disc.", "mcap": "large", "etf": "XLY",
+                     "sub_sector": "Casinos/Gaming", "beta_30d": 1.5},
+            "LVS":  {"name": "Las Vegas Sands", "sector": "Consumer Disc.", "mcap": "large", "etf": "XLY",
+                     "sub_sector": "Casinos/Macau", "beta_30d": 1.4},
+            "CMG":  {"name": "Chipotle", "sector": "Consumer Disc.", "mcap": "large", "etf": "XLY",
+                     "sub_sector": "Fast Casual", "beta_30d": 1.2},
+            "YUM":  {"name": "Yum! Brands", "sector": "Consumer Disc.", "mcap": "large", "etf": "XLY",
+                     "sub_sector": "QSR", "beta_30d": 0.8},
+            "SPOT": {"name": "Spotify", "sector": "Communication", "mcap": "large", "etf": "XLC",
+                     "sub_sector": "Music Streaming", "beta_30d": 1.6},
+
+            # ── AIRLINES ────────────────────────────────────────────────────
+            "DAL":  {"name": "Delta Air Lines", "sector": "Transportation", "mcap": "large", "etf": "JETS",
+                     "sub_sector": "Airlines", "beta_30d": 1.4},
+            "UAL":  {"name": "United Airlines", "sector": "Transportation", "mcap": "large", "etf": "JETS",
+                     "sub_sector": "Airlines", "beta_30d": 1.5},
+            "AAL":  {"name": "American Airlines", "sector": "Transportation", "mcap": "mid", "etf": "JETS",
+                     "sub_sector": "Airlines", "beta_30d": 1.8},
+            "LUV":  {"name": "Southwest Airlines", "sector": "Transportation", "mcap": "large", "etf": "JETS",
+                     "sub_sector": "Low-Cost Airlines", "beta_30d": 1.3},
+
+            # ── MORE RAILROADS ──────────────────────────────────────────────
+            "CSX":  {"name": "CSX Corporation", "sector": "Transportation", "mcap": "large", "etf": "IYT",
+                     "sub_sector": "Railroads", "beta_30d": 0.9},
+            "NSC":  {"name": "Norfolk Southern", "sector": "Transportation", "mcap": "large", "etf": "IYT",
+                     "sub_sector": "Railroads", "beta_30d": 1.0},
+
+            # ── MORE INDUSTRIALS ────────────────────────────────────────────
+            "MMM":  {"name": "3M", "sector": "Industrials", "mcap": "large", "etf": "XLI",
+                     "sub_sector": "Diversified Industrial", "beta_30d": 0.9},
+            "EMR":  {"name": "Emerson Electric", "sector": "Industrials", "mcap": "large", "etf": "XLI",
+                     "sub_sector": "Automation/Industrial", "beta_30d": 1.0},
+            "ETN":  {"name": "Eaton Corporation", "sector": "Industrials", "mcap": "large", "etf": "XLI",
+                     "sub_sector": "Power Management", "beta_30d": 1.1},
+            "PH":   {"name": "Parker Hannifin", "sector": "Industrials", "mcap": "large", "etf": "XLI",
+                     "sub_sector": "Motion/Fluid Control", "beta_30d": 1.0},
+            "ADP":  {"name": "ADP", "sector": "Technology", "mcap": "mega", "etf": "XLK",
+                     "sub_sector": "Payroll/HR Tech", "beta_30d": 0.8},
+            "GEHC": {"name": "GE HealthCare", "sector": "Healthcare", "mcap": "large", "etf": "IHI",
+                     "sub_sector": "Medical Imaging", "beta_30d": 1.0},
+
+            # ── MORE REITs ──────────────────────────────────────────────────
+            "O":    {"name": "Realty Income", "sector": "REITs", "mcap": "large", "etf": "VNQ",
+                     "sub_sector": "Net Lease REITs", "beta_30d": 0.7},
+            "DLR":  {"name": "Digital Realty", "sector": "REITs", "mcap": "large", "etf": "VNQ",
+                     "sub_sector": "Data Center REITs", "beta_30d": 0.9},
+            "PSA":  {"name": "Public Storage", "sector": "REITs", "mcap": "large", "etf": "VNQ",
+                     "sub_sector": "Self-Storage REITs", "beta_30d": 0.8},
+            "WELL": {"name": "Welltower", "sector": "REITs", "mcap": "large", "etf": "VNQ",
+                     "sub_sector": "Healthcare REITs", "beta_30d": 0.8},
+
+            # ── MORE MATERIALS ──────────────────────────────────────────────
+            "SHW":  {"name": "Sherwin-Williams", "sector": "Materials", "mcap": "mega", "etf": "XLB",
+                     "sub_sector": "Paints/Coatings", "beta_30d": 1.0},
+            "ALB":  {"name": "Albemarle", "sector": "Materials", "mcap": "large", "etf": "XLB",
+                     "sub_sector": "Lithium", "beta_30d": 2.0},
+            "MP":   {"name": "MP Materials", "sector": "Materials", "mcap": "mid", "etf": "XLB",
+                     "sub_sector": "Rare Earth Metals", "beta_30d": 1.8},
+            "AA":   {"name": "Alcoa", "sector": "Materials", "mcap": "mid", "etf": "XLB",
+                     "sub_sector": "Aluminum", "beta_30d": 1.6},
+
+            # ── MORE UTILITIES ──────────────────────────────────────────────
+            "EXC":  {"name": "Exelon", "sector": "Utilities", "mcap": "large", "etf": "XLU",
+                     "sub_sector": "Regulated Electric/Nuclear", "beta_30d": 0.5},
+            "CEG":  {"name": "Constellation Energy", "sector": "Utilities", "mcap": "large", "etf": "XLU",
+                     "sub_sector": "Nuclear Power", "beta_30d": 1.2},
+            "ED":   {"name": "Consolidated Edison", "sector": "Utilities", "mcap": "large", "etf": "XLU",
+                     "sub_sector": "Regulated Electric/Gas", "beta_30d": 0.4},
+
+            # ── MORE ENERGY ─────────────────────────────────────────────────
+            "DVN":  {"name": "Devon Energy", "sector": "Energy", "mcap": "large", "etf": "XOP",
+                     "sub_sector": "E&P", "beta_30d": 1.4},
+            "MPC":  {"name": "Marathon Petroleum", "sector": "Energy", "mcap": "large", "etf": "XLE",
+                     "sub_sector": "Refining", "beta_30d": 1.2},
+            "VLO":  {"name": "Valero Energy", "sector": "Energy", "mcap": "large", "etf": "XLE",
+                     "sub_sector": "Refining", "beta_30d": 1.3},
+            "PSX":  {"name": "Phillips 66", "sector": "Energy", "mcap": "large", "etf": "XLE",
+                     "sub_sector": "Refining/Midstream", "beta_30d": 1.1},
+            "BKR":  {"name": "Baker Hughes", "sector": "Energy", "mcap": "large", "etf": "OIH",
+                     "sub_sector": "Oilfield Services/Tech", "beta_30d": 1.2},
+
+            # ── BROAD MARKET ETFs (macro stories) ──────────────────────────
+            "SPY":  {"name": "SPDR S&P 500 ETF", "sector": "Macro", "mcap": "mega", "etf": "SPY",
+                     "sub_sector": "Broad Market", "beta_30d": 1.0},
+            "QQQ":  {"name": "Invesco QQQ ETF", "sector": "Macro", "mcap": "mega", "etf": "QQQ",
+                     "sub_sector": "Nasdaq-100", "beta_30d": 1.2},
+            "IWM":  {"name": "iShares Russell 2000 ETF", "sector": "Macro", "mcap": "large", "etf": "IWM",
+                     "sub_sector": "Small Cap", "beta_30d": 1.1},
+            "GLD":  {"name": "SPDR Gold ETF", "sector": "Macro", "mcap": "large", "etf": "GLD",
+                     "sub_sector": "Gold", "beta_30d": 0.3},
+            "SLV":  {"name": "iShares Silver ETF", "sector": "Macro", "mcap": "large", "etf": "SLV",
+                     "sub_sector": "Silver", "beta_30d": 0.5},
+            "TLT":  {"name": "iShares 20+ Year Treasury ETF", "sector": "Macro", "mcap": "large", "etf": "TLT",
+                     "sub_sector": "Long-Duration Bonds", "beta_30d": -0.3},
+            "ARKK": {"name": "ARK Innovation ETF", "sector": "Macro", "mcap": "large", "etf": "ARKK",
+                     "sub_sector": "Disruptive Innovation", "beta_30d": 1.8},
+
+            # ── E-COMMERCE / CONSUMER TECH ──────────────────────────────────
+            "SHOP": {"name": "Shopify", "sector": "Technology", "mcap": "large", "etf": "XLK",
+                     "sub_sector": "E-Commerce Platform", "beta_30d": 1.6},
+            "DASH": {"name": "DoorDash", "sector": "Consumer Disc.", "mcap": "large", "etf": "XLY",
+                     "sub_sector": "Food Delivery", "beta_30d": 1.7},
+            "LYFT": {"name": "Lyft", "sector": "Technology", "mcap": "mid", "etf": "XLK",
+                     "sub_sector": "Ride-Sharing", "beta_30d": 1.9},
+            "ROKU": {"name": "Roku", "sector": "Communication", "mcap": "mid", "etf": "XLC",
+                     "sub_sector": "Streaming/CTV", "beta_30d": 2.0},
+            "PINS": {"name": "Pinterest", "sector": "Communication", "mcap": "large", "etf": "XLC",
+                     "sub_sector": "Social Media", "beta_30d": 1.6},
+            "SNAP": {"name": "Snap", "sector": "Communication", "mcap": "large", "etf": "XLC",
+                     "sub_sector": "Social Media", "beta_30d": 2.2},
+            "RBLX": {"name": "Roblox", "sector": "Communication", "mcap": "large", "etf": "XLC",
+                     "sub_sector": "Gaming/Metaverse", "beta_30d": 1.9},
+
+            # ── FINTECH / BUY-NOW-PAY-LATER ────────────────────────────────
+            "SOFI": {"name": "SoFi Technologies", "sector": "Financials", "mcap": "mid", "etf": "FINX",
+                     "sub_sector": "Neobank/Fintech", "beta_30d": 2.0},
+            "AFRM": {"name": "Affirm", "sector": "Financials", "mcap": "mid", "etf": "FINX",
+                     "sub_sector": "BNPL", "beta_30d": 2.5},
+            "UPST": {"name": "Upstart", "sector": "Financials", "mcap": "mid", "etf": "FINX",
+                     "sub_sector": "AI Lending", "beta_30d": 3.0},
+
+            # ── AI HARDWARE / DATA CENTERS ──────────────────────────────────
+            "SMCI": {"name": "Super Micro Computer", "sector": "Technology", "mcap": "large", "etf": "XLK",
+                     "sub_sector": "AI Servers", "beta_30d": 2.5},
+            "DELL": {"name": "Dell Technologies", "sector": "Technology", "mcap": "large", "etf": "XLK",
+                     "sub_sector": "Servers/PCs", "beta_30d": 1.2},
+            "HPQ":  {"name": "HP Inc", "sector": "Technology", "mcap": "large", "etf": "XLK",
+                     "sub_sector": "PCs/Printers", "beta_30d": 0.9},
+            "CSCO": {"name": "Cisco", "sector": "Technology", "mcap": "mega", "etf": "XLK",
+                     "sub_sector": "Networking/Security", "beta_30d": 0.9},
+
+            # ── AI / ROBOTICS PURE-PLAY ─────────────────────────────────────
+            "AI":   {"name": "C3.ai", "sector": "Technology", "mcap": "mid", "etf": "BOTZ",
+                     "sub_sector": "Enterprise AI", "beta_30d": 2.5},
+            "SOUN": {"name": "SoundHound AI", "sector": "Technology", "mcap": "small", "etf": "BOTZ",
+                     "sub_sector": "Voice AI", "beta_30d": 3.5},
+            "IONQ": {"name": "IonQ", "sector": "Technology", "mcap": "small", "etf": "QTUM",
+                     "sub_sector": "Quantum Computing", "beta_30d": 3.0},
+            "RGTI": {"name": "Rigetti Computing", "sector": "Technology", "mcap": "small", "etf": "QTUM",
+                     "sub_sector": "Quantum Computing", "beta_30d": 3.5},
+
+            # ── CHINESE ADRs (trade on NYSE/NASDAQ) ─────────────────────────
+            "BABA": {"name": "Alibaba", "sector": "Consumer Disc.", "mcap": "mega", "etf": "KWEB",
+                     "sub_sector": "China E-Commerce/Cloud", "beta_30d": 1.4},
+            "JD":   {"name": "JD.com", "sector": "Consumer Disc.", "mcap": "large", "etf": "KWEB",
+                     "sub_sector": "China E-Commerce", "beta_30d": 1.5},
+            "BIDU": {"name": "Baidu", "sector": "Communication", "mcap": "large", "etf": "KWEB",
+                     "sub_sector": "China Search/AI", "beta_30d": 1.4},
+            "PDD":  {"name": "PDD Holdings (Temu)", "sector": "Consumer Disc.", "mcap": "mega", "etf": "KWEB",
+                     "sub_sector": "China E-Commerce", "beta_30d": 1.5},
+            "NIO":  {"name": "NIO", "sector": "Consumer Disc.", "mcap": "mid", "etf": "KWEB",
+                     "sub_sector": "China EV", "beta_30d": 2.2},
+            "XPEV": {"name": "XPeng", "sector": "Consumer Disc.", "mcap": "mid", "etf": "KWEB",
+                     "sub_sector": "China EV", "beta_30d": 2.3},
+            "LI":   {"name": "Li Auto", "sector": "Consumer Disc.", "mcap": "large", "etf": "KWEB",
+                     "sub_sector": "China EV/PHEV", "beta_30d": 1.9},
+            "SE":   {"name": "Sea Limited", "sector": "Technology", "mcap": "large", "etf": "KWEB",
+                     "sub_sector": "SEA Gaming/E-Commerce", "beta_30d": 1.8},
+
+            # ── TRAVEL / LEISURE ────────────────────────────────────────────
+            "MAR":  {"name": "Marriott International", "sector": "Consumer Disc.", "mcap": "large", "etf": "XLY",
+                     "sub_sector": "Hotels", "beta_30d": 1.1},
+            "HLT":  {"name": "Hilton Worldwide", "sector": "Consumer Disc.", "mcap": "large", "etf": "XLY",
+                     "sub_sector": "Hotels", "beta_30d": 1.1},
+            "EXPE": {"name": "Expedia", "sector": "Consumer Disc.", "mcap": "large", "etf": "XLY",
+                     "sub_sector": "Online Travel", "beta_30d": 1.3},
+            "RCL":  {"name": "Royal Caribbean", "sector": "Consumer Disc.", "mcap": "large", "etf": "XLY",
+                     "sub_sector": "Cruise Lines", "beta_30d": 1.7},
+            "CCL":  {"name": "Carnival Corporation", "sector": "Consumer Disc.", "mcap": "large", "etf": "XLY",
+                     "sub_sector": "Cruise Lines", "beta_30d": 1.8},
+            "NCLH": {"name": "Norwegian Cruise Line", "sector": "Consumer Disc.", "mcap": "mid", "etf": "XLY",
+                     "sub_sector": "Cruise Lines", "beta_30d": 1.9},
+
+            # ── CONSUMER BRANDS ─────────────────────────────────────────────
+            "LULU": {"name": "Lululemon", "sector": "Consumer Disc.", "mcap": "large", "etf": "XLY",
+                     "sub_sector": "Athletic Apparel", "beta_30d": 1.3},
+            "ONON": {"name": "On Holding (On Running)", "sector": "Consumer Disc.", "mcap": "large", "etf": "XLY",
+                     "sub_sector": "Athletic Footwear", "beta_30d": 1.5},
+            "CELH": {"name": "Celsius Holdings", "sector": "Consumer Staples", "mcap": "mid", "etf": "XLP",
+                     "sub_sector": "Energy Drinks", "beta_30d": 2.0},
+            "MNST": {"name": "Monster Beverage", "sector": "Consumer Staples", "mcap": "large", "etf": "XLP",
+                     "sub_sector": "Energy Drinks", "beta_30d": 0.9},
+            "ELF":  {"name": "e.l.f. Beauty", "sector": "Consumer Staples", "mcap": "mid", "etf": "XLP",
+                     "sub_sector": "Cosmetics", "beta_30d": 1.8},
+            "DUOL": {"name": "Duolingo", "sector": "Technology", "mcap": "large", "etf": "IGV",
+                     "sub_sector": "EdTech/AI", "beta_30d": 1.7},
+
+            # ── STREAMING / MEDIA ───────────────────────────────────────────
+            "WBD":  {"name": "Warner Bros Discovery", "sector": "Communication", "mcap": "large", "etf": "XLC",
+                     "sub_sector": "Media/Streaming", "beta_30d": 1.5},
+            "PARA": {"name": "Paramount Global", "sector": "Communication", "mcap": "mid", "etf": "XLC",
+                     "sub_sector": "Media/Streaming", "beta_30d": 1.4},
+
+            # ── BIOTECH GENE EDITING ────────────────────────────────────────
+            "CRSP": {"name": "CRISPR Therapeutics", "sector": "Healthcare", "mcap": "mid", "etf": "ARKG",
+                     "sub_sector": "Gene Editing", "beta_30d": 2.0},
+            "NTLA": {"name": "Intellia Therapeutics", "sector": "Healthcare", "mcap": "mid", "etf": "ARKG",
+                     "sub_sector": "Gene Editing", "beta_30d": 2.2},
+            "BEAM": {"name": "Beam Therapeutics", "sector": "Healthcare", "mcap": "small", "etf": "ARKG",
+                     "sub_sector": "Gene Editing", "beta_30d": 2.3},
+            "RXRX": {"name": "Recursion Pharmaceuticals", "sector": "Healthcare", "mcap": "mid", "etf": "ARKG",
+                     "sub_sector": "AI Drug Discovery", "beta_30d": 2.5},
+            "HIMS": {"name": "Hims & Hers Health", "sector": "Healthcare", "mcap": "mid", "etf": "XLV",
+                     "sub_sector": "Telehealth/GLP-1", "beta_30d": 2.5},
+
+            # ── MINING / PRECIOUS METALS ────────────────────────────────────
+            "GOLD": {"name": "Barrick Gold", "sector": "Materials", "mcap": "large", "etf": "GDX",
+                     "sub_sector": "Gold Mining", "beta_30d": 0.5},
+            "VALE": {"name": "Vale", "sector": "Materials", "mcap": "large", "etf": "XLB",
+                     "sub_sector": "Iron Ore/Nickel Mining", "beta_30d": 1.2},
+
+            # ── DEFENSE TECH / SPACE ────────────────────────────────────────
+            "AXON": {"name": "Axon Enterprise", "sector": "Defense", "mcap": "large", "etf": "ITA",
+                     "sub_sector": "Law Enforcement Tech", "beta_30d": 1.4},
+            "KTOS": {"name": "Kratos Defense", "sector": "Defense", "mcap": "mid", "etf": "ITA",
+                     "sub_sector": "Drones/Defense Tech", "beta_30d": 1.5},
+            "RKLB": {"name": "Rocket Lab", "sector": "Defense", "mcap": "mid", "etf": "ITA",
+                     "sub_sector": "Space Launch", "beta_30d": 2.0},
+
+            # ── LEGACY TECH ─────────────────────────────────────────────────
+            "CSCO": {"name": "Cisco", "sector": "Technology", "mcap": "mega", "etf": "XLK",
+                     "sub_sector": "Networking/Security", "beta_30d": 0.9},
+            "ACN":  {"name": "Accenture", "sector": "Technology", "mcap": "mega", "etf": "XLK",
+                     "sub_sector": "IT Consulting", "beta_30d": 1.0},
+            "ZM":   {"name": "Zoom Video", "sector": "Technology", "mcap": "large", "etf": "IGV",
+                     "sub_sector": "Video Conferencing", "beta_30d": 1.3},
+            "OKTA": {"name": "Okta", "sector": "Technology", "mcap": "large", "etf": "CIBR",
+                     "sub_sector": "Identity Security", "beta_30d": 1.6},
+            "PATH": {"name": "UiPath", "sector": "Technology", "mcap": "large", "etf": "IGV",
+                     "sub_sector": "RPA/AI Automation", "beta_30d": 1.7},
+
+            # ── MEME / HIGH-INTEREST STOCKS ─────────────────────────────────
+            "GME":  {"name": "GameStop", "sector": "Consumer Disc.", "mcap": "mid", "etf": "XLY",
+                     "sub_sector": "Video Game Retail", "beta_30d": 2.5},
+            "AMC":  {"name": "AMC Entertainment", "sector": "Consumer Disc.", "mcap": "small", "etf": "XLY",
+                     "sub_sector": "Movie Theaters", "beta_30d": 3.0},
         }
 
         # ── ALIAS RESOLUTION: Common Names → Tickers ──────────────────────
@@ -879,6 +1335,197 @@ class NYSEReferenceDB:
             "at&t": "T", "att": "T",
             "verizon": "VZ",
             "t-mobile": "TMUS",
+            # Mega-cap Tech
+            "apple": "AAPL", "iphone": "AAPL", "tim cook": "AAPL", "mac": "AAPL", "ipad": "AAPL",
+            "microsoft": "MSFT", "azure": "MSFT", "satya nadella": "MSFT", "copilot": "MSFT",
+            "alphabet": "GOOGL", "google": "GOOGL", "sundar pichai": "GOOGL", "gemini": "GOOGL", "youtube": "GOOGL",
+            "meta": "META", "facebook": "META", "instagram": "META", "whatsapp": "META", "zuckerberg": "META", "mark zuckerberg": "META",
+            "amazon": "AMZN", "aws": "AMZN", "andy jassy": "AMZN", "prime": "AMZN",
+            "netflix": "NFLX", "reed hastings": "NFLX",
+            "tesla": "TSLA", "elon musk": "TSLA", "musk": "TSLA", "cybertruck": "TSLA", "model 3": "TSLA",
+            # Software
+            "adobe": "ADBE",
+            "intuit": "INTU", "turbotax": "INTU", "quickbooks": "INTU",
+            "synopsys": "SNPS",
+            "cadence": "CDNS", "cadence design": "CDNS",
+            "workday": "WDAY",
+            "atlassian": "TEAM", "jira": "TEAM", "confluence": "TEAM",
+            "hubspot": "HUBS",
+            "uber": "UBER",
+            # Cybersecurity
+            "palo alto": "PANW", "palo alto networks": "PANW",
+            "crowdstrike": "CRWD", "falcon": "CRWD",
+            "fortinet": "FTNT",
+            "zscaler": "ZS",
+            "sentinelone": "S",
+            # Cloud/Data
+            "snowflake": "SNOW",
+            "datadog": "DDOG",
+            "cloudflare": "NET",
+            "mongodb": "MDB",
+            # Crypto
+            "coinbase": "COIN", "brian armstrong": "COIN",
+            "microstrategy": "MSTR", "michael saylor": "MSTR",
+            "riot": "RIOT", "riot platforms": "RIOT",
+            "marathon digital": "MARA", "marathon": "MARA",
+            "robinhood": "HOOD",
+            # Biotech/Healthcare
+            "moderna": "MRNA",
+            "biontech": "BNTX",
+            "regeneron": "REGN",
+            "vertex": "VRTX", "vertex pharmaceuticals": "VRTX",
+            "biogen": "BIIB",
+            "intuitive surgical": "ISRG", "da vinci": "ISRG",
+            "boston scientific": "BSX",
+            "medtronic": "MDT",
+            "cvs": "CVS", "cvs health": "CVS",
+            "cigna": "CI",
+            "humana": "HUM",
+            "dexcom": "DXCM",
+            "novo nordisk": "NVO", "ozempic": "NVO", "wegovy": "NVO", "semaglutide": "NVO",
+            "mounjaro": "LLY", "tirzepatide": "LLY",
+            # More Financials
+            "american express": "AXP", "amex": "AXP",
+            "paypal": "PYPL",
+            "square": "SQ", "block": "SQ", "jack dorsey": "SQ",
+            "schwab": "SCHW", "charles schwab": "SCHW",
+            "us bancorp": "USB", "us bank": "USB",
+            "pnc": "PNC", "pnc financial": "PNC",
+            "truist": "TFC",
+            "s&p global": "SPGI", "s and p global": "SPGI",
+            "moody's": "MCO", "moodys": "MCO",
+            "intercontinental exchange": "ICE",
+            "cme": "CME", "cme group": "CME", "chicago mercantile": "CME",
+            "kkr": "KKR",
+            "apollo": "APO", "apollo global": "APO",
+            # Autos
+            "general motors": "GM",
+            "ford": "F", "ford motor": "F", "jim farley": "F",
+            "rivian": "RIVN",
+            "lucid": "LCID", "lucid motors": "LCID",
+            # Consumer Disc
+            "target": "TGT",
+            "lowe's": "LOW", "lowes": "LOW",
+            "tjx": "TJX", "tj maxx": "TJX", "marshalls": "TJX",
+            "booking": "BKNG", "booking holdings": "BKNG", "booking.com": "BKNG", "priceline": "BKNG",
+            "airbnb": "ABNB",
+            "draftkings": "DKNG",
+            "mgm": "MGM", "mgm resorts": "MGM",
+            "las vegas sands": "LVS", "sands": "LVS",
+            "chipotle": "CMG",
+            "yum brands": "YUM", "yum! brands": "YUM", "kfc": "YUM", "taco bell": "YUM", "pizza hut": "YUM",
+            "spotify": "SPOT",
+            # Airlines
+            "delta": "DAL", "delta airlines": "DAL", "delta air lines": "DAL",
+            "united airlines": "UAL",
+            "american airlines": "AAL",
+            "southwest": "LUV", "southwest airlines": "LUV",
+            # Railroads
+            "csx": "CSX",
+            "norfolk southern": "NSC",
+            # Industrials
+            "3m": "MMM",
+            "emerson": "EMR", "emerson electric": "EMR",
+            "eaton": "ETN",
+            "parker hannifin": "PH", "parker": "PH",
+            "adp": "ADP", "automatic data processing": "ADP",
+            "ge healthcare": "GEHC",
+            # REITs
+            "realty income": "O",
+            "digital realty": "DLR",
+            "public storage": "PSA",
+            "welltower": "WELL",
+            # Materials
+            "sherwin-williams": "SHW", "sherwin williams": "SHW",
+            "albemarle": "ALB",
+            "mp materials": "MP",
+            "alcoa": "AA",
+            # Utilities
+            "exelon": "EXC",
+            "constellation energy": "CEG", "constellation": "CEG",
+            "consolidated edison": "ED", "con ed": "ED",
+            # More Energy
+            "devon energy": "DVN", "devon": "DVN",
+            "marathon petroleum": "MPC",
+            "valero": "VLO", "valero energy": "VLO",
+            "phillips 66": "PSX",
+            "baker hughes": "BKR",
+            # ETFs
+            "s&p 500": "SPY", "sp500": "SPY",
+            "nasdaq": "QQQ",
+            "russell 2000": "IWM",
+            "gold etf": "GLD",
+            "silver etf": "SLV",
+            "ark": "ARKK", "cathie wood": "ARKK", "ark invest": "ARKK",
+            # E-Commerce / Consumer Tech
+            "shopify": "SHOP", "tobi lutke": "SHOP",
+            "doordash": "DASH",
+            "lyft": "LYFT",
+            "roku": "ROKU",
+            "pinterest": "PINS",
+            "snap": "SNAP", "snapchat": "SNAP",
+            "roblox": "RBLX",
+            # Fintech
+            "sofi": "SOFI", "sofi technologies": "SOFI",
+            "affirm": "AFRM",
+            "upstart": "UPST",
+            # AI Hardware
+            "super micro": "SMCI", "supermicro": "SMCI",
+            "dell": "DELL", "dell technologies": "DELL",
+            "hp": "HPQ", "hp inc": "HPQ",
+            "cisco": "CSCO",
+            # AI Pure-play
+            "c3.ai": "AI", "c3 ai": "AI",
+            "soundhound": "SOUN",
+            "ionq": "IONQ",
+            "rigetti": "RGTI",
+            # Chinese ADRs
+            "alibaba": "BABA", "jack ma": "BABA",
+            "jd.com": "JD", "jd com": "JD",
+            "baidu": "BIDU",
+            "pinduoduo": "PDD", "temu": "PDD",
+            "nio": "NIO",
+            "xpeng": "XPEV",
+            "li auto": "LI",
+            "sea limited": "SE", "shopee": "SE", "garena": "SE",
+            # Travel / Leisure
+            "marriott": "MAR",
+            "hilton": "HLT",
+            "expedia": "EXPE",
+            "royal caribbean": "RCL",
+            "carnival": "CCL",
+            "norwegian cruise": "NCLH",
+            # Consumer Brands
+            "lululemon": "LULU",
+            "on running": "ONON", "on holding": "ONON",
+            "celsius": "CELH",
+            "monster": "MNST", "monster energy": "MNST",
+            "elf beauty": "ELF", "e.l.f.": "ELF",
+            "duolingo": "DUOL",
+            # Media / Streaming
+            "warner bros": "WBD", "warner brothers": "WBD", "hbo": "WBD", "max": "WBD",
+            "paramount": "PARA", "cbs": "PARA",
+            # Biotech Gene Editing
+            "crispr": "CRSP",
+            "intellia": "NTLA",
+            "beam therapeutics": "BEAM",
+            "recursion": "RXRX",
+            "hims": "HIMS", "hers": "HIMS", "hims & hers": "HIMS",
+            # Mining
+            "barrick": "GOLD", "barrick gold": "GOLD",
+            "vale": "VALE",
+            # Defense Tech
+            "axon": "AXON", "taser": "AXON",
+            "kratos": "KTOS",
+            "rocket lab": "RKLB",
+            # Legacy Tech
+            "accenture": "ACN",
+            "zoom": "ZM", "zoom video": "ZM",
+            "okta": "OKTA",
+            "uipath": "PATH",
+            # Meme stocks
+            "gamestop": "GME", "game stop": "GME",
+            "amc": "AMC", "amc entertainment": "AMC",
         }
 
         # ── SECTOR → ETF CONTAGION MAP ─────────────────────────────────────
@@ -1427,6 +2074,7 @@ class MarketImpactScoringEngine:
             affected_etfs=entities["etfs"],
             supply_chain_exposure=entities.get("supply_chain", []),
             contagion_tickers=entities.get("contagion", []),
+            url=event.url,
             latency_ms=round(latency_ms, 2),
         )
 
@@ -1879,6 +2527,7 @@ class NYSEImpactScreener:
             headline=raw["headline"],
             body=raw.get("body", ""),
             raw_tickers=raw.get("tickers", []),
+            url=raw.get("link", raw.get("url", "")),
         )
 
     async def process_event(self, raw: dict) -> Optional[ScoredEvent]:
