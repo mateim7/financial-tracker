@@ -1,0 +1,29 @@
+# Secrets — never commit these
+.env
+.env.local
+*.env
+secrets.py
+config_local.py
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+venv/
+.venv/
+
+# Node / React
+node_modules/
+build/
+npm-debug.log*
+
+# Database (local data, not for version control)
+*.db
+*.sqlite
+*.sqlite3
+
+# OS
+.DS_Store
+Thumbs.db
