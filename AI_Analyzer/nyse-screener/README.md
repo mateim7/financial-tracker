@@ -1,4 +1,4 @@
-# NYSE Impact Screener
+# Financial Tracker
 
 Real-time market-moving news screener with AI-powered buy/sell signals and stock availability checks.
 
