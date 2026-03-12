@@ -1,0 +1,19 @@
+version: "3.9"
+
+services:
+  backend:
+    build: ./AI_Analyzer
+    ports:
+      - "8765:8765"
+      - "8766:8766"
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+    restart: unless-stopped
+
+  frontend:
+    build: ./AI_Analyzer/nyse-screener
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    restart: unless-stopped

@@ -115,7 +115,7 @@ async def start_http_server(db: "EventDatabase"):
     app.router.add_get("/download", http_handler)
     runner = aiohttp_web.AppRunner(app)
     await runner.setup()
-    await aiohttp_web.TCPSite(runner, "localhost", 8766).start()
+    await aiohttp_web.TCPSite(runner, "0.0.0.0", 8766).start()
     print("  HTTP server on http://localhost:8766/download")
 
 
@@ -2303,7 +2303,7 @@ async def main():
     rss = RSSFeed()
     screener.rss = rss
     await start_http_server(screener.db)
-    async with websockets.serve(ws_handler, "localhost", 8765):
+    async with websockets.serve(ws_handler, "0.0.0.0", 8765):
         print("  WebSocket server listening on ws://localhost:8765")
         print("  Polling RSS feeds every 60 seconds. Press Ctrl+C to stop.\n")
         while True:
