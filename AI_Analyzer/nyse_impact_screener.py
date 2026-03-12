@@ -664,9 +664,11 @@ class EventDatabase:
 class NYSEReferenceDB:
     """
     Comprehensive in-memory ticker resolution database.
-    Covers: Semiconductors, Energy (upstream/midstream/downstream), Financials,
-    Healthcare/Pharma/Biotech, Defense/Aerospace, Industrials, Technology,
-    Consumer, Utilities, REITs, Materials, Transportation, Telecom, and more.
+    Covers: Semiconductors, Mega-cap Tech, Cloud/SaaS, Cybersecurity, Crypto,
+    Energy (upstream/midstream/downstream/refining), Financials, Fintech,
+    Healthcare/Pharma/Biotech, Defense/Aerospace, Industrials, Autos/EVs,
+    Consumer, Airlines, Utilities, REITs, Materials, Transportation, Telecom,
+    and Broad Market ETFs.
 
     Production version uses SQLite FTS5 for fuzzy matching + Redis hot cache.
     """
