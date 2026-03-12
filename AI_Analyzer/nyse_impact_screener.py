@@ -2,7 +2,7 @@
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║     NYSE IMPACT NEWS SCREENER v2.0 — Advanced Multi-Sector Engine          ║
 ║                                                                             ║
-║  Expanded coverage: 85+ tickers across 16 sectors                          ║
+║  Expanded coverage: 300+ tickers across 20 sectors                         ║
 ║  Features: Supply chain contagion, cross-sector propagation, volatility    ║
 ║            regime detection, earnings surprise calibration, macro regime    ║
 ║            awareness, multi-entity resolution, indirect exposure mapping   ║
@@ -21,6 +21,7 @@ import time
 import re
 import math
 import random
+import hashlib
 from dataclasses import dataclass, field, asdict
 from enum import Enum
 from typing import Optional
@@ -66,6 +67,11 @@ async def broadcast_event(event):
         "brief":              event.brief,
         "buy_signal":         event.buy_signal,
         "buy_confidence":     event.buy_confidence,
+        "reasoning":          event.reasoning,
+        "risk":               event.risk,
+        "time_horizon":       event.time_horizon,
+        "correlated_moves":   event.correlated_moves,
+        "url":                event.url,
         "stock_availability": event.stock_availability,
         "price_data":         event.price_data,
     }
@@ -118,25 +124,72 @@ async def start_http_server(db: "EventDatabase"):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 RSS_SOURCES = [
-    {"url": "https://www.cnbc.com/id/100003114/device/rss/rss.html", "name": "CNBC", "tier": 2},
-    {"url": "https://www.cnbc.com/id/10001147/device/rss/rss.html", "name": "CNBC Markets", "tier": 2},
-    {"url": "https://www.cnbc.com/id/20910258/device/rss/rss.html", "name": "CNBC Finance", "tier": 2},
-    {"url": "https://feeds.marketwatch.com/marketwatch/topstories/", "name": "MarketWatch", "tier": 2},
-    {"url": "https://www.investing.com/rss/news.rss", "name": "Investing.com", "tier": 2},
-    {"url": "https://feeds.content.dowjones.io/public/rss/mw_topstories", "name": "MarketWatch DJ", "tier": 1},
-    {"url": "https://www.ft.com/rss/home", "name": "Financial Times", "tier": 1},
-    {"url": "https://finance.yahoo.com/news/rssindex", "name": "Yahoo Finance", "tier": 2},
-    {"url": "https://www.thestreet.com/rss/main.xml", "name": "TheStreet", "tier": 2},
-    {"url": "https://seekingalpha.com/feed.xml", "name": "Seeking Alpha", "tier": 2},
-    {"url": "https://www.zacks.com/rss/newsroom.php", "name": "Zacks", "tier": 2},
-    {"url": "https://www.fool.com/feeds/foolwatch/", "name": "Motley Fool", "tier": 2},
-    {"url": "https://feeds.barrons.com/barrons/articles", "name": "Barron's", "tier": 1},
+    # ── Tier 1: Institutional / Wire Services ───────────────────────────────
+    {"url": "https://feeds.content.dowjones.io/public/rss/mw_topstories",     "name": "MarketWatch DJ",    "tier": 1},
+    {"url": "https://feeds.a.dj.com/rss/WSJcomUSBusiness.xml",                "name": "WSJ Business",      "tier": 1},
+    {"url": "https://feeds.a.dj.com/rss/RSSMarketsMain.xml",                  "name": "WSJ Markets",       "tier": 1},
+
+    # ── Tier 2: Professional Financial Media ─────────────────────────────────
+    {"url": "https://www.cnbc.com/id/100003114/device/rss/rss.html",          "name": "CNBC",              "tier": 2},
+    {"url": "https://www.cnbc.com/id/10001147/device/rss/rss.html",           "name": "CNBC Markets",      "tier": 2},
+    {"url": "https://www.cnbc.com/id/20910258/device/rss/rss.html",           "name": "CNBC Finance",      "tier": 2},
+    {"url": "https://www.cnbc.com/id/15839135/device/rss/rss.html",           "name": "CNBC Tech",         "tier": 2},
+    {"url": "https://feeds.marketwatch.com/marketwatch/topstories/",          "name": "MarketWatch",       "tier": 2},
+    {"url": "https://www.investing.com/rss/news.rss",                         "name": "Investing.com",     "tier": 2},
+    {"url": "https://finance.yahoo.com/news/rssindex",                        "name": "Yahoo Finance",     "tier": 2},
+    {"url": "https://finance.yahoo.com/rss/2.0/headline?s=%5EGSPC",          "name": "Yahoo S&P News",    "tier": 2},
+    {"url": "https://www.thestreet.com/rss/main.xml",                         "name": "TheStreet",         "tier": 2},
+    {"url": "https://seekingalpha.com/feed.xml",                              "name": "Seeking Alpha",     "tier": 2},
+    {"url": "https://www.zacks.com/rss/newsroom.php",                         "name": "Zacks",             "tier": 2},
+    {"url": "https://www.fool.com/feeds/foolwatch/",                          "name": "Motley Fool",       "tier": 2},
+    {"url": "https://www.benzinga.com/feed",                                  "name": "Benzinga",          "tier": 2},
+    {"url": "https://www.nasdaq.com/feed/rssoutbound?category=Markets",       "name": "Nasdaq Markets",    "tier": 2},
+    {"url": "https://www.nasdaq.com/feed/rssoutbound?category=Earnings",      "name": "Nasdaq Earnings",   "tier": 2},
+    {"url": "https://feeds.businesswire.com/rss/home/?rss=G1&rssid=1",       "name": "Business Wire",     "tier": 2},
+    {"url": "https://www.globenewswire.com/RssFeed/subjectcode/17-Financial%20Markets", "name": "GlobeNewsWire", "tier": 2},
+    {"url": "https://www.prnewswire.com/rss/news-releases-list.rss",          "name": "PR Newswire",       "tier": 2},
+]
+
+# ── Per-ticker Yahoo Finance RSS — watches these stocks specifically ─────────
+_TICKER_WATCH = [
+    # Mega-cap (Big 7)
+    "AAPL", "MSFT", "GOOGL", "META", "AMZN", "NVDA", "TSLA",
+    # Semis
+    "AMD", "INTC", "TSM", "AVGO", "QCOM", "ARM", "MU", "ASML",
+    # AI / Cloud / SaaS
+    "PLTR", "CRWD", "PANW", "NET", "SNOW", "DDOG", "NOW", "CRM", "ORCL",
+    # Crypto-adjacent
+    "COIN", "MSTR", "RIOT", "MARA", "HOOD", "SOFI",
+    # Financials
+    "JPM", "BAC", "GS", "MS", "V", "MA", "PYPL", "SQ", "SCHW",
+    # Healthcare / Pharma
+    "LLY", "MRNA", "ABBV", "UNH", "REGN", "VRTX",
+    # Energy
+    "XOM", "CVX", "OXY",
+    # Consumer / Media
+    "NFLX", "DIS", "NKE", "SBUX", "MCD",
+    # EVs
+    "RIVN", "LCID", "GM", "F",
+    # Popular high-volume trades
+    "SMCI", "SHOP", "SNAP", "RBLX", "LYFT", "DASH", "ROKU",
+]
+RSS_SOURCES += [
+    {"url": f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={t}&region=US&lang=en-US",
+     "name": f"Yahoo/{t}", "tier": 2}
+    for t in _TICKER_WATCH
 ]
 
 class RSSFeed:
     def __init__(self):
         self._seen_ids: set = set()
+        self._seen_headline_hashes: set = set()
         self._recent_articles: list = []
+
+    @staticmethod
+    def _headline_hash(headline: str) -> str:
+        """Normalize headline and return an MD5 hash for cross-source deduplication."""
+        normalized = re.sub(r'[^a-z0-9]', '', headline.lower())
+        return hashlib.md5(normalized.encode()).hexdigest()
 
     async def fetch(self) -> list[dict]:
         import feedparser
@@ -144,41 +197,62 @@ class RSSFeed:
         import email.utils
 
         cutoff = time.time() - 86400  # only articles from last 24 hours
-        new_items = []
         headers = {"User-Agent": "Mozilla/5.0 (compatible; FinanceScreener/1.0)"}
-        async with aiohttp.ClientSession(headers=headers) as session:
-            for source in RSS_SOURCES:
-                try:
-                    async with session.get(source["url"], timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                        text = await resp.text()
-                    feed = feedparser.parse(text)
-                    for entry in feed.entries:
-                        uid = entry.get("id") or entry.get("link") or entry.get("title")
-                        if not uid or uid in self._seen_ids:
-                            continue
-                        # Filter out old articles
-                        published = entry.get("published") or entry.get("updated")
-                        if published:
-                            try:
-                                pub_ts = email.utils.parsedate_to_datetime(published).timestamp()
-                                if pub_ts < cutoff:
-                                    continue
-                            except Exception:
-                                pass
-                        self._seen_ids.add(uid)
-                        headline = entry.get("title", "").strip()
-                        if not headline:
-                            continue
-                        new_items.append({
-                            "source": source["name"],
-                            "source_tier": source["tier"],
-                            "headline": headline,
-                            "body": entry.get("summary", entry.get("description", "")),
-                        })
-                except Exception as e:
-                    print(f"  [RSS] Failed to fetch {source['name']}: {e}")
+        connector = aiohttp.TCPConnector(ssl=False)  # skip SSL cert verify for some feeds
+
+        async def fetch_source(session: aiohttp.ClientSession, source: dict) -> list[dict]:
+            items = []
+            try:
+                async with session.get(source["url"], timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    text = await resp.text()
+                feed = feedparser.parse(text)
+                for entry in feed.entries:
+                    uid = entry.get("id") or entry.get("link") or entry.get("title")
+                    if not uid or uid in self._seen_ids:
+                        continue
+                    published = entry.get("published") or entry.get("updated")
+                    if published:
+                        try:
+                            pub_ts = email.utils.parsedate_to_datetime(published).timestamp()
+                            if pub_ts < cutoff:
+                                continue
+                        except Exception:
+                            pass
+                    headline = entry.get("title", "").strip()
+                    if not headline:
+                        continue
+                    items.append({
+                        "uid": uid,
+                        "source": source["name"],
+                        "source_tier": source["tier"],
+                        "headline": headline,
+                        "body": entry.get("summary", entry.get("description", "")),
+                        "link": entry.get("link", ""),
+                    })
+            except Exception as e:
+                print(f"  [RSS] Failed to fetch {source['name']}: {e}")
+            return items
+
+        async with aiohttp.ClientSession(headers=headers, connector=connector) as session:
+            results = await asyncio.gather(
+                *[fetch_source(session, source) for source in RSS_SOURCES]
+            )
+
+        new_items = []
+        for source_items in results:
+            for item in source_items:
+                uid = item.pop("uid")
+                if uid in self._seen_ids:
+                    continue
+                self._seen_ids.add(uid)
+                h = self._headline_hash(item["headline"])
+                if h in self._seen_headline_hashes:
+                    continue
+                self._seen_headline_hashes.add(h)
+                new_items.append(item)
+
         self._recent_articles.extend(new_items)
-        self._recent_articles = self._recent_articles[-300:]
+        self._recent_articles = self._recent_articles[-600:]
         return new_items
 
 
@@ -302,6 +376,11 @@ class ScoredEvent:
     brief: str = ""
     buy_signal: str = ""
     buy_confidence: int = 0
+    reasoning: list[str] = field(default_factory=list)
+    risk: str = ""
+    time_horizon: str = ""
+    correlated_moves: list[str] = field(default_factory=list)
+    url: str = ""
     stock_availability: dict = field(default_factory=dict)
     price_data: dict = field(default_factory=dict)
     latency_ms: float = 0.0
@@ -323,7 +402,7 @@ class ClaudeScorer:
             self.client = anthropic.Anthropic(api_key=api_key)
             print("  [Claude] API key loaded — enhanced scoring enabled")
 
-    def enhance(self, scored: ScoredEvent, headline: str, body: str) -> ScoredEvent:
+    async def enhance(self, scored: ScoredEvent, headline: str, body: str) -> ScoredEvent:
         """Call Claude to improve scoring fields. Falls back to original if unavailable."""
         if not self.client:
             return scored
@@ -331,10 +410,12 @@ class ClaudeScorer:
             return scored
 
         valid_types = [e.value for e in EventType]
+        tickers_str = ", ".join(scored.affected_tickers) if scored.affected_tickers else "MACRO"
         prompt = f"""You are a financial news analyst. Analyze this news headline and return ONLY a JSON object.
 
 Headline: {headline}
-Body: {body[:300] if body else "N/A"}
+Body: {body[:400] if body else "N/A"}
+Affected tickers: {tickers_str}
 
 Current automated scoring:
 - event_type: {scored.event_type.value}
@@ -348,7 +429,7 @@ Return JSON with these exact fields:
   "sentiment": float from -1.0 to 1.0,
   "impact_score": integer from 1 to 100,
   "direction": "BULLISH" or "BEARISH" or "NEUTRAL",
-  "brief": one sentence explaining the market impact,
+  "brief": one sentence summary of the market impact,
   "buy_signal": "BUY" or "HOLD" or "SELL",
   "buy_confidence": integer from 1 to 100. Be precise and granular — every value from 1 to 100 is valid. Do NOT round to multiples of 5 or 10. Think carefully and pick the exact number that reflects your conviction. Scale:
     1-10: extremely low conviction, near noise
@@ -361,14 +442,19 @@ Return JSON with these exact fields:
     85-94: high confidence, strong opportunity
     95-99: very high conviction, near certain
     100: absolute certainty (reserve only for unambiguous catalysts like FDA approval of blockbuster drug)
+  "reasoning": array of 2-3 short strings, each one specific reason why this is a BUY/SELL/HOLD. Be concrete — mention numbers, catalysts, or comparisons. E.g. ["Revenue beat of 12% vs estimates signals demand inflection", "Guidance raised — rare for this sector in current macro environment"],
+  "risk": one sentence on the single biggest risk that could invalidate this signal,
+  "time_horizon": one of "intraday" or "swing (1-3d)" or "medium-term (1-4w)",
+  "correlated_moves": array of up to 4 ticker strings (beyond the primary tickers) that are likely to move in sympathy or inverse — e.g. sector peers, suppliers, competitors. Only include real NYSE/NASDAQ tickers.
 }}
 
-For buy_signal and buy_confidence: assess whether this news creates a buying opportunity for the affected stocks. Consider short-term price impact, fundamental change, magnitude, and risk. Be precise — use the full 1-100 scale, not just round numbers. Only correct other scoring fields where automated scoring is clearly wrong. Return valid JSON only."""
+Only correct other scoring fields where automated scoring is clearly wrong. Return valid JSON only."""
 
         try:
-            response = self.client.messages.create(
+            response = await asyncio.to_thread(
+                self.client.messages.create,
                 model="claude-sonnet-4-6",
-                max_tokens=300,
+                max_tokens=500,
                 messages=[{"role": "user", "content": prompt}]
             )
             text = response.content[0].text.strip()
@@ -392,13 +478,21 @@ For buy_signal and buy_confidence: assess whether this news creates a buying opp
                 scored.buy_signal = data["buy_signal"]
             if isinstance(data.get("buy_confidence"), (int, float)):
                 scored.buy_confidence = max(0, min(100, int(data["buy_confidence"])))
+            if isinstance(data.get("reasoning"), list):
+                scored.reasoning = [str(r) for r in data["reasoning"][:3]]
+            if data.get("risk"):
+                scored.risk = str(data["risk"])
+            if data.get("time_horizon"):
+                scored.time_horizon = str(data["time_horizon"])
+            if isinstance(data.get("correlated_moves"), list):
+                scored.correlated_moves = [str(t) for t in data["correlated_moves"][:4]]
 
         except Exception as e:
             print(f"  [Claude] Scoring error: {e}")
 
         return scored
 
-    def validate_buy(self, scored: ScoredEvent, corroborating: list[dict]) -> ScoredEvent:
+    async def validate_buy(self, scored: ScoredEvent, corroborating: list[dict]) -> ScoredEvent:
         """Second Claude call to validate BUY signal using corroborating sources."""
         if not self.client or not corroborating:
             return scored
@@ -417,7 +511,8 @@ Return ONLY JSON:
   "validation_note": one sentence on what the other sources add or change
 }}"""
         try:
-            response = self.client.messages.create(
+            response = await asyncio.to_thread(
+                self.client.messages.create,
                 model="claude-sonnet-4-6",
                 max_tokens=120,
                 messages=[{"role": "user", "content": prompt}]
@@ -443,19 +538,21 @@ Return ONLY JSON:
 
 class StockAvailabilityChecker:
     US_EXCHANGES = {"NYQ", "NMS", "NGM", "PCX", "BTS", "NYSE MKT"}
-    _cache: dict = {}
+    PRICE_TTL = 300  # seconds — re-fetch after 5 minutes
+    _cache: dict = {}  # ticker -> {"data": {...}, "ts": float}
 
-    def check_tickers(self, tickers: list[str]) -> dict:
-        results = {}
-        for ticker in tickers:
-            if ticker in self._cache:
-                results[ticker] = self._cache[ticker]
-                continue
+    def _is_fresh(self, ticker: str) -> bool:
+        entry = self._cache.get(ticker)
+        return entry is not None and (time.time() - entry["ts"]) < self.PRICE_TTL
+
+    async def check_tickers(self, tickers: list[str]) -> dict:
+        import yfinance as yf
+
+        def _fetch_one(ticker: str) -> tuple[str, dict]:
             try:
-                import yfinance as yf
                 info = yf.Ticker(ticker).fast_info
                 exchange = getattr(info, 'exchange', '') or ''
-                available = exchange in self.US_EXCHANGES
+                available = exchange in StockAvailabilityChecker.US_EXCHANGES
                 last_price = getattr(info, 'last_price', None)
                 prev_close = getattr(info, 'previous_close', None)
                 if last_price and prev_close and prev_close != 0:
@@ -471,8 +568,15 @@ class StockAvailabilityChecker:
                 }
             except Exception:
                 result = {"exchange": "unknown", "revolut": False, "xtb": False, "price": None, "change_pct": None}
-            self._cache[ticker] = result
-            results[ticker] = result
+            return ticker, result
+
+        results = {t: self._cache[t]["data"] for t in tickers if self._is_fresh(t)}
+        uncached = [t for t in tickers if not self._is_fresh(t)]
+        if uncached:
+            fetched = await asyncio.gather(*[asyncio.to_thread(_fetch_one, t) for t in uncached])
+            for ticker, result in fetched:
+                self._cache[ticker] = {"data": result, "ts": time.time()}
+                results[ticker] = result
         return results
 
 
@@ -554,7 +658,7 @@ class EventDatabase:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# SECTION 2: NYSE REFERENCE DATA — 85+ TICKERS, 16 SECTORS
+# SECTION 2: NYSE REFERENCE DATA — 300+ TICKERS, 20 SECTORS
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class NYSEReferenceDB:
@@ -775,6 +879,126 @@ class NYSEReferenceDB:
                      "sub_sector": "Telecom/Wireless", "beta_30d": 0.6},
             "TMUS": {"name": "T-Mobile", "sector": "Telecom", "mcap": "large", "etf": "XLC",
                      "sub_sector": "Telecom/Wireless", "beta_30d": 0.7},
+
+            # ── MEGA-CAP TECH (Big 7) ───────────────────────────────────────
+            "AAPL": {"name": "Apple", "sector": "Technology", "mcap": "mega", "etf": "XLK",
+                     "sub_sector": "Consumer Electronics/Software", "beta_30d": 1.2},
+            "MSFT": {"name": "Microsoft", "sector": "Technology", "mcap": "mega", "etf": "XLK",
+                     "sub_sector": "Cloud/Enterprise Software", "beta_30d": 1.1},
+            "GOOGL": {"name": "Alphabet", "sector": "Communication", "mcap": "mega", "etf": "XLC",
+                      "sub_sector": "Search/Cloud/AI", "beta_30d": 1.2},
+            "GOOG":  {"name": "Alphabet (Class C)", "sector": "Communication", "mcap": "mega", "etf": "XLC",
+                      "sub_sector": "Search/Cloud/AI", "beta_30d": 1.2},
+            "META":  {"name": "Meta Platforms", "sector": "Communication", "mcap": "mega", "etf": "XLC",
+                      "sub_sector": "Social Media/AI", "beta_30d": 1.4},
+            "AMZN": {"name": "Amazon", "sector": "Consumer Disc.", "mcap": "mega", "etf": "XLY",
+                     "sub_sector": "E-Commerce/Cloud", "beta_30d": 1.3},
+            "NFLX": {"name": "Netflix", "sector": "Communication", "mcap": "large", "etf": "XLC",
+                     "sub_sector": "Streaming", "beta_30d": 1.5},
+            "TSLA": {"name": "Tesla", "sector": "Consumer Disc.", "mcap": "mega", "etf": "XLY",
+                     "sub_sector": "EV/Autonomous", "beta_30d": 2.0},
+
+            # ── MORE TECHNOLOGY / SOFTWARE ──────────────────────────────────
+            "ADBE": {"name": "Adobe", "sector": "Technology", "mcap": "large", "etf": "XLK",
+                     "sub_sector": "Creative/AI Software", "beta_30d": 1.3},
+            "INTU": {"name": "Intuit", "sector": "Technology", "mcap": "large", "etf": "XLK",
+                     "sub_sector": "Financial Software", "beta_30d": 1.2},
+            "SNPS": {"name": "Synopsys", "sector": "Technology", "mcap": "large", "etf": "XLK",
+                     "sub_sector": "EDA Software", "beta_30d": 1.3},
+            "CDNS": {"name": "Cadence Design", "sector": "Technology", "mcap": "large", "etf": "XLK",
+                     "sub_sector": "EDA Software", "beta_30d": 1.3},
+            "WDAY": {"name": "Workday", "sector": "Technology", "mcap": "large", "etf": "IGV",
+                     "sub_sector": "Cloud/HR Software", "beta_30d": 1.2},
+            "TEAM": {"name": "Atlassian", "sector": "Technology", "mcap": "large", "etf": "IGV",
+                     "sub_sector": "Cloud/Dev Tools", "beta_30d": 1.4},
+            "HUBS": {"name": "HubSpot", "sector": "Technology", "mcap": "large", "etf": "IGV",
+                     "sub_sector": "Cloud/CRM", "beta_30d": 1.3},
+            "UBER": {"name": "Uber", "sector": "Technology", "mcap": "large", "etf": "XLK",
+                     "sub_sector": "Ride-Sharing/Logistics", "beta_30d": 1.5},
+            "SMCI": {"name": "Super Micro Computer", "sector": "Technology", "mcap": "large", "etf": "XLK",
+                     "sub_sector": "AI Servers", "beta_30d": 2.5},
+            "SHOP": {"name": "Shopify", "sector": "Technology", "mcap": "large", "etf": "IGV",
+                     "sub_sector": "E-Commerce Platform", "beta_30d": 1.8},
+
+            # ── CYBERSECURITY ───────────────────────────────────────────────
+            "PANW": {"name": "Palo Alto Networks", "sector": "Technology", "mcap": "large", "etf": "CIBR",
+                     "sub_sector": "Cybersecurity", "beta_30d": 1.4},
+            "CRWD": {"name": "CrowdStrike", "sector": "Technology", "mcap": "large", "etf": "CIBR",
+                     "sub_sector": "Cybersecurity/EDR", "beta_30d": 1.6},
+            "FTNT": {"name": "Fortinet", "sector": "Technology", "mcap": "large", "etf": "CIBR",
+                     "sub_sector": "Cybersecurity/Firewall", "beta_30d": 1.3},
+            "ZS":   {"name": "Zscaler", "sector": "Technology", "mcap": "large", "etf": "CIBR",
+                     "sub_sector": "Cloud Security", "beta_30d": 1.6},
+            "S":    {"name": "SentinelOne", "sector": "Technology", "mcap": "mid", "etf": "CIBR",
+                     "sub_sector": "Cybersecurity/AI", "beta_30d": 1.8},
+
+            # ── CLOUD / DATA ────────────────────────────────────────────────
+            "SNOW": {"name": "Snowflake", "sector": "Technology", "mcap": "large", "etf": "WCLD",
+                     "sub_sector": "Cloud Data Platform", "beta_30d": 1.7},
+            "DDOG": {"name": "Datadog", "sector": "Technology", "mcap": "large", "etf": "WCLD",
+                     "sub_sector": "Cloud Monitoring", "beta_30d": 1.6},
+            "NET":  {"name": "Cloudflare", "sector": "Technology", "mcap": "large", "etf": "WCLD",
+                     "sub_sector": "Cloud Networking/Security", "beta_30d": 1.7},
+            "MDB":  {"name": "MongoDB", "sector": "Technology", "mcap": "large", "etf": "WCLD",
+                     "sub_sector": "Cloud Database", "beta_30d": 1.8},
+            "RBLX": {"name": "Roblox", "sector": "Technology", "mcap": "mid", "etf": "WCLD",
+                     "sub_sector": "Gaming/Metaverse", "beta_30d": 1.9},
+            "SNAP": {"name": "Snap", "sector": "Communication", "mcap": "mid", "etf": "XLC",
+                     "sub_sector": "Social Media", "beta_30d": 2.2},
+            "ROKU": {"name": "Roku", "sector": "Communication", "mcap": "mid", "etf": "XLC",
+                     "sub_sector": "Streaming Platform", "beta_30d": 2.0},
+
+            # ── CRYPTO-ADJACENT ─────────────────────────────────────────────
+            "COIN": {"name": "Coinbase", "sector": "Financials", "mcap": "large", "etf": "BKCH",
+                     "sub_sector": "Crypto Exchange", "beta_30d": 3.0},
+            "MSTR": {"name": "MicroStrategy", "sector": "Technology", "mcap": "large", "etf": "BKCH",
+                     "sub_sector": "Bitcoin Treasury", "beta_30d": 3.5},
+            "RIOT": {"name": "Riot Platforms", "sector": "Technology", "mcap": "mid", "etf": "BKCH",
+                     "sub_sector": "Bitcoin Mining", "beta_30d": 3.2},
+            "MARA": {"name": "Marathon Digital", "sector": "Technology", "mcap": "mid", "etf": "BKCH",
+                     "sub_sector": "Bitcoin Mining", "beta_30d": 3.3},
+            "HOOD": {"name": "Robinhood", "sector": "Financials", "mcap": "mid", "etf": "BKCH",
+                     "sub_sector": "Retail Brokerage/Crypto", "beta_30d": 2.5},
+
+            # ── FINTECH ─────────────────────────────────────────────────────
+            "PYPL": {"name": "PayPal", "sector": "Financials", "mcap": "large", "etf": "XLF",
+                     "sub_sector": "Digital Payments", "beta_30d": 1.4},
+            "SQ":   {"name": "Block (Square)", "sector": "Financials", "mcap": "large", "etf": "XLF",
+                     "sub_sector": "Fintech/Payments", "beta_30d": 1.8},
+            "SOFI": {"name": "SoFi Technologies", "sector": "Financials", "mcap": "mid", "etf": "XLF",
+                     "sub_sector": "Digital Banking", "beta_30d": 2.0},
+            "SCHW": {"name": "Charles Schwab", "sector": "Financials", "mcap": "large", "etf": "XLF",
+                     "sub_sector": "Retail Brokerage", "beta_30d": 1.2},
+            "AFRM": {"name": "Affirm", "sector": "Financials", "mcap": "mid", "etf": "XLF",
+                     "sub_sector": "BNPL/Fintech", "beta_30d": 2.3},
+            "DASH": {"name": "DoorDash", "sector": "Consumer Disc.", "mcap": "large", "etf": "XLY",
+                     "sub_sector": "Food Delivery", "beta_30d": 1.7},
+            "LYFT": {"name": "Lyft", "sector": "Technology", "mcap": "mid", "etf": "XLK",
+                     "sub_sector": "Ride-Sharing", "beta_30d": 2.0},
+
+            # ── BIOTECH / PHARMA (additional) ───────────────────────────────
+            "MRNA": {"name": "Moderna", "sector": "Healthcare", "mcap": "large", "etf": "IBB",
+                     "sub_sector": "mRNA Biotech", "beta_30d": 1.8},
+            "BNTX": {"name": "BioNTech", "sector": "Healthcare", "mcap": "large", "etf": "IBB",
+                     "sub_sector": "mRNA Biotech", "beta_30d": 1.7},
+            "REGN": {"name": "Regeneron", "sector": "Healthcare", "mcap": "large", "etf": "IBB",
+                     "sub_sector": "Biotech", "beta_30d": 0.8},
+            "VRTX": {"name": "Vertex Pharmaceuticals", "sector": "Healthcare", "mcap": "large", "etf": "IBB",
+                     "sub_sector": "Rare Disease Biotech", "beta_30d": 0.9},
+            "NVO":  {"name": "Novo Nordisk", "sector": "Healthcare", "mcap": "mega", "etf": "XLV",
+                     "sub_sector": "Diabetes/GLP-1 Pharma", "beta_30d": 0.8},
+
+            # ── EVs / AUTOS ──────────────────────────────────────────────────
+            "GM":   {"name": "General Motors", "sector": "Consumer Disc.", "mcap": "large", "etf": "XLY",
+                     "sub_sector": "Autos/EV", "beta_30d": 1.3},
+            "F":    {"name": "Ford Motor", "sector": "Consumer Disc.", "mcap": "large", "etf": "XLY",
+                     "sub_sector": "Autos/EV", "beta_30d": 1.4},
+            "RIVN": {"name": "Rivian", "sector": "Consumer Disc.", "mcap": "mid", "etf": "XLY",
+                     "sub_sector": "EV Trucks", "beta_30d": 2.3},
+            "LCID": {"name": "Lucid Group", "sector": "Consumer Disc.", "mcap": "small", "etf": "XLY",
+                     "sub_sector": "EV Luxury", "beta_30d": 2.5},
+            "DVN":  {"name": "Devon Energy", "sector": "Energy", "mcap": "large", "etf": "XOP",
+                     "sub_sector": "E&P", "beta_30d": 1.4},
         }
 
         # ── ALIAS RESOLUTION: Common Names → Tickers ──────────────────────
@@ -879,6 +1103,65 @@ class NYSEReferenceDB:
             "at&t": "T", "att": "T",
             "verizon": "VZ",
             "t-mobile": "TMUS",
+            # Mega-cap Tech (Big 7)
+            "apple": "AAPL", "iphone": "AAPL", "tim cook": "AAPL",
+            "microsoft": "MSFT", "satya nadella": "MSFT", "azure": "MSFT",
+            "alphabet": "GOOGL", "google": "GOOGL", "sundar pichai": "GOOGL", "gemini": "GOOGL",
+            "meta": "META", "facebook": "META", "mark zuckerberg": "META", "instagram": "META", "whatsapp": "META",
+            "amazon": "AMZN", "aws": "AMZN", "andy jassy": "AMZN",
+            "netflix": "NFLX",
+            "tesla": "TSLA", "elon musk": "TSLA", "elon": "TSLA",
+            # More Tech / Software
+            "adobe": "ADBE",
+            "intuit": "INTU", "turbotax": "INTU",
+            "synopsys": "SNPS",
+            "cadence": "CDNS",
+            "workday": "WDAY",
+            "atlassian": "TEAM", "jira": "TEAM",
+            "hubspot": "HUBS",
+            "uber": "UBER",
+            "super micro": "SMCI", "supermicro": "SMCI",
+            "shopify": "SHOP",
+            # Cybersecurity
+            "palo alto": "PANW", "palo alto networks": "PANW",
+            "crowdstrike": "CRWD",
+            "fortinet": "FTNT",
+            "zscaler": "ZS",
+            "sentinelone": "S",
+            # Cloud / Data
+            "snowflake": "SNOW",
+            "datadog": "DDOG",
+            "cloudflare": "NET",
+            "mongodb": "MDB",
+            "roblox": "RBLX",
+            "snap": "SNAP", "snapchat": "SNAP",
+            "roku": "ROKU",
+            # Crypto-adjacent
+            "coinbase": "COIN",
+            "microstrategy": "MSTR",
+            "riot": "RIOT", "riot platforms": "RIOT",
+            "marathon digital": "MARA",
+            "robinhood": "HOOD",
+            # Fintech
+            "paypal": "PYPL",
+            "block": "SQ", "square": "SQ", "cash app": "SQ", "jack dorsey": "SQ",
+            "sofi": "SOFI",
+            "schwab": "SCHW", "charles schwab": "SCHW",
+            "affirm": "AFRM",
+            "doordash": "DASH",
+            "lyft": "LYFT",
+            # Biotech additions
+            "moderna": "MRNA",
+            "biontech": "BNTX",
+            "regeneron": "REGN",
+            "vertex": "VRTX",
+            "novo nordisk": "NVO", "ozempic": "NVO", "wegovy": "NVO",
+            # EVs / Autos
+            "general motors": "GM",
+            "ford": "F", "ford motor": "F",
+            "rivian": "RIVN",
+            "lucid": "LCID",
+            "devon": "DVN", "devon energy": "DVN",
         }
 
         # ── SECTOR → ETF CONTAGION MAP ─────────────────────────────────────
@@ -1427,6 +1710,7 @@ class MarketImpactScoringEngine:
             affected_etfs=entities["etfs"],
             supply_chain_exposure=entities.get("supply_chain", []),
             contagion_tickers=entities.get("contagion", []),
+            url=event.url,
             latency_ms=round(latency_ms, 2),
         )
 
@@ -1879,6 +2163,7 @@ class NYSEImpactScreener:
             headline=raw["headline"],
             body=raw.get("body", ""),
             raw_tickers=raw.get("tickers", []),
+            url=raw.get("link", ""),
         )
 
     async def process_event(self, raw: dict) -> Optional[ScoredEvent]:
@@ -1893,13 +2178,13 @@ class NYSEImpactScreener:
 
         # Check stock availability + live price BEFORE Claude (free, no tokens)
         if scored.affected_tickers:
-            availability = self.availability_checker.check_tickers(scored.affected_tickers)
+            availability = await self.availability_checker.check_tickers(scored.affected_tickers)
             scored.stock_availability = availability
             scored.price_data = {t: {"price": v.get("price"), "change_pct": v.get("change_pct")} for t, v in availability.items()}
 
         # Skip Claude for LOW impact events (score < 40)
         if scored.impact_score >= 40:
-            scored = self.claude_scorer.enhance(scored, event.headline, event.body)
+            scored = await self.claude_scorer.enhance(scored, event.headline, event.body)
 
             # Validate BUY signal > 50% against other sources
             if scored.buy_signal == "BUY" and scored.buy_confidence > 50 and self.rss:
@@ -1911,7 +2196,7 @@ class NYSEImpactScreener:
                 ]
                 if corroborating:
                     print(f"  [Claude] Validating BUY signal with {len(corroborating[:3])} corroborating source(s)...")
-                    scored = self.claude_scorer.validate_buy(scored, corroborating[:3])
+                    scored = await self.claude_scorer.validate_buy(scored, corroborating[:3])
 
         self.processed_count += 1
         self.db.insert(scored)

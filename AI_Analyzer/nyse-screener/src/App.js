@@ -78,40 +78,89 @@ function EventRow({ event, isNew }) {
   const severity = getSeverity(event.score);
   const borderColors = { critical: "rgba(255,45,85,0.4)", high: "rgba(255,149,0,0.2)", medium: "rgba(48,209,88,0.1)", low: "transparent" };
   const [timeAgo, setTimeAgo] = useState(getTimeAgo(event.ts));
+  const [hovered, setHovered] = useState(false);
   useEffect(() => { const i = setInterval(() => setTimeAgo(getTimeAgo(event.ts)), 5000); return () => clearInterval(i); }, [event.ts]);
 
+  const hasUrl = Boolean(event.url);
+
+  const handleClick = () => {
+    if (hasUrl) window.open(event.url, "_blank", "noopener,noreferrer");
+  };
+
+  const confidenceLabel = (signal, conf) => {
+    if (signal === "BUY") {
+      if (conf === 100) return "SURE PURCHASE";
+      if (conf >= 95) return "VERY HIGH CONVICTION";
+      if (conf >= 85) return "HIGH CONFIDENCE";
+      if (conf >= 75) return "STRONG BUY";
+      if (conf >= 65) return "SOLID CONVICTION";
+      if (conf >= 50) return "RECOMMENDED PURCHASE";
+      if (conf >= 41) return "BORDERLINE BUY";
+      if (conf >= 26) return "SPECULATIVE BUY";
+      if (conf >= 11) return "WEAK SIGNAL";
+      return "VERY LOW CONVICTION";
+    }
+    if (signal === "SELL") {
+      if (conf >= 85) return "STRONG SELL";
+      if (conf >= 65) return "CONFIDENT SELL";
+      if (conf >= 50) return "RECOMMENDED SELL";
+      return "SPECULATIVE SELL";
+    }
+    return "NEUTRAL — HOLD";
+  };
+
   return (
-    <div style={{
-      padding: "14px 18px",
-      borderBottom: "1px solid #1c1c1e",
-      borderLeft: `3px solid ${borderColors[severity]}`,
-      background: isNew ? "rgba(255,214,10,0.04)" : "transparent",
-      transition: "background 1.5s ease",
-      animation: isNew ? "slideIn 0.4s cubic-bezier(.4,0,.2,1)" : "none",
-      cursor: "pointer",
-    }}
-    onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.03)"}
-    onMouseLeave={e => e.currentTarget.style.background = isNew ? "rgba(255,214,10,0.02)" : "transparent"}
+    <div
+      onClick={handleClick}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        padding: "14px 18px",
+        borderBottom: "1px solid #1c1c1e",
+        borderLeft: `3px solid ${borderColors[severity]}`,
+        background: hovered ? "rgba(255,255,255,0.03)" : isNew ? "rgba(255,214,10,0.04)" : "transparent",
+        transition: "background 0.15s ease",
+        animation: isNew ? "slideIn 0.4s cubic-bezier(.4,0,.2,1)" : "none",
+        cursor: hasUrl ? "pointer" : "default",
+      }}
     >
       <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
         <div style={{ paddingTop: 5 }}><SeverityDot score={event.score} /></div>
         <div style={{ flex: 1, minWidth: 0 }}>
+
+          {/* Top row: badges + time + optional link icon */}
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
             <DirectionBadge direction={event.direction} />
             <span style={{ fontSize: 11, color: "#636366", fontFamily: "'JetBrains Mono', monospace", background: "rgba(99,99,102,0.12)", padding: "1px 6px", borderRadius: 3 }}>
               {event.type.replace(/_/g, " ")}
             </span>
             <SourceBadge source={event.source} tier={event.tier} />
-            <span style={{ fontSize: 11, color: "#48484a", marginLeft: "auto", whiteSpace: "nowrap" }}>{timeAgo}</span>
+            {event.time_horizon && (
+              <span style={{ fontSize: 10, color: "#636366", fontFamily: "'JetBrains Mono', monospace", background: "rgba(99,99,102,0.08)", padding: "1px 6px", borderRadius: 3, border: "1px solid #2c2c2e" }}>
+                {event.time_horizon}
+              </span>
+            )}
+            <span style={{ fontSize: 11, color: "#48484a", marginLeft: "auto", whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: 5 }}>
+              {timeAgo}
+              {hasUrl && (
+                <span style={{ fontSize: 13, color: hovered ? "#0a84ff" : "#3a3a3c", transition: "color 0.15s" }} title="Open article">↗</span>
+              )}
+            </span>
           </div>
+
+          {/* Headline */}
           <p style={{ margin: 0, fontSize: 14, lineHeight: 1.45, color: severity === "critical" ? "#f5f5f7" : severity === "low" ? "#8e8e93" : "#d1d1d6", fontWeight: severity === "critical" ? 600 : 400 }}>
             {event.headline}
           </p>
+
+          {/* Brief */}
           {event.brief && (
             <p style={{ margin: "4px 0 0", fontSize: 12, color: "#8e8e93", lineHeight: 1.4, fontStyle: "italic" }}>
               {event.brief}
             </p>
           )}
+
+          {/* Buy signal + confidence */}
           {event.buy_signal && (
             <div style={{ marginTop: 6, display: "inline-flex", alignItems: "center", gap: 6,
               padding: "3px 10px", borderRadius: 4,
@@ -123,28 +172,32 @@ function EventRow({ event, isNew }) {
                 {event.buy_signal}
               </span>
               <span style={{ fontSize: 11, color: "#636366", fontFamily: "'JetBrains Mono', monospace" }}>
-                {event.buy_confidence}% · {
-                  event.buy_signal === "BUY" ? (
-                    event.buy_confidence === 100 ? "SURE PURCHASE" :
-                    event.buy_confidence >= 95 ? "VERY HIGH CONVICTION" :
-                    event.buy_confidence >= 85 ? "HIGH CONFIDENCE" :
-                    event.buy_confidence >= 75 ? "STRONG BUY" :
-                    event.buy_confidence >= 65 ? "SOLID CONVICTION" :
-                    event.buy_confidence >= 50 ? "RECOMMENDED PURCHASE" :
-                    event.buy_confidence >= 41 ? "BORDERLINE BUY" :
-                    event.buy_confidence >= 26 ? "SPECULATIVE BUY" :
-                    event.buy_confidence >= 11 ? "WEAK SIGNAL" : "VERY LOW CONVICTION"
-                  ) : event.buy_signal === "SELL" ? (
-                    event.buy_confidence >= 85 ? "STRONG SELL" :
-                    event.buy_confidence >= 65 ? "CONFIDENT SELL" :
-                    event.buy_confidence >= 50 ? "RECOMMENDED SELL" : "SPECULATIVE SELL"
-                  ) : "NEUTRAL — HOLD"
-                }
+                {event.buy_confidence}% · {confidenceLabel(event.buy_signal, event.buy_confidence)}
               </span>
             </div>
           )}
+
+          {/* Reasoning bullets */}
+          {event.reasoning && event.reasoning.length > 0 && (
+            <ul style={{ margin: "6px 0 0", padding: "0 0 0 14px", listStyle: "none" }}>
+              {event.reasoning.map((r, i) => (
+                <li key={i} style={{ fontSize: 11, color: "#8e8e93", lineHeight: 1.5, display: "flex", gap: 5 }}>
+                  <span style={{ color: "#3a3a3c" }}>›</span> {r}
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {/* Risk */}
+          {event.risk && (
+            <p style={{ margin: "5px 0 0", fontSize: 11, color: "#ff9500", lineHeight: 1.4, display: "flex", gap: 4, alignItems: "flex-start" }}>
+              <span>⚠</span> {event.risk}
+            </p>
+          )}
+
+          {/* Platform availability */}
           {event.stock_availability && event.tickers && event.tickers.length > 0 && (
-            <div style={{ display: "flex", gap: 5, marginTop: 5, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", gap: 5, marginTop: 6, flexWrap: "wrap" }}>
               {event.tickers.map(t => {
                 const info = event.stock_availability[t];
                 if (!info) return null;
@@ -163,6 +216,8 @@ function EventRow({ event, isNew }) {
               })}
             </div>
           )}
+
+          {/* Tickers + prices + ETFs + score */}
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
             {event.tickers.length > 0 ? event.tickers.map(t => {
               const pd = event.price_data && event.price_data[t];
@@ -177,7 +232,7 @@ function EventRow({ event, isNew }) {
                 </span>
               );
             }) : <span style={{ fontSize: 11, color: "#636366", fontStyle: "italic" }}>MACRO — Broad market</span>}
-            {event.etfs.length > 0 && (
+            {event.etfs && event.etfs.length > 0 && (
               <span style={{ fontSize: 11, color: "#48484a", marginLeft: 4 }}>
                 → {event.etfs.join(", ")}
               </span>
@@ -186,6 +241,19 @@ function EventRow({ event, isNew }) {
               <ScoreBar score={event.score} />
             </div>
           </div>
+
+          {/* Correlated moves */}
+          {event.correlated_moves && event.correlated_moves.length > 0 && (
+            <div style={{ display: "flex", alignItems: "center", gap: 5, marginTop: 5, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 10, color: "#48484a", fontFamily: "'JetBrains Mono', monospace" }}>WATCH:</span>
+              {event.correlated_moves.map(t => (
+                <span key={t} style={{ fontSize: 10, padding: "1px 5px", borderRadius: 3, background: "rgba(99,99,102,0.1)", color: "#636366", fontFamily: "'JetBrains Mono', monospace", border: "1px solid #2c2c2e" }}>
+                  {t}
+                </span>
+              ))}
+            </div>
+          )}
+
         </div>
       </div>
     </div>
@@ -249,8 +317,6 @@ function StatsBar({ events }) {
   const bullish = events.filter(e => e.direction === "BULLISH").length;
   const bearish = events.filter(e => e.direction === "BEARISH").length;
   const avgScore = events.length > 0 ? Math.round(events.reduce((s, e) => s + e.score, 0) / events.length) : 0;
-  const topSectors = [...new Set(events.flatMap(e => e.sectors))].slice(0, 4);
-
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 1, background: "#1c1c1e", borderRadius: 10, overflow: "hidden", marginBottom: 2 }}>
       {[
