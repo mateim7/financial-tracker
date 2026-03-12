@@ -1,7 +1,7 @@
+import "./App.css";
 import { useState, useEffect, useRef } from "react";
 
-const DUMMY_EVENTS = [];
-
+/* ── helpers ─────────────────────────────────────────────────────────────── */
 function getSeverity(score) {
   if (score >= 80) return "critical";
   if (score >= 60) return "high";
@@ -17,225 +17,240 @@ function getTimeAgo(ts) {
   return `${Math.floor(diff / 3600)}h ago`;
 }
 
-function ScoreBar({ score }) {
+const sevColor = { critical: "#eb4d3d", high: "#f5a623", medium: "#34c759", low: "#c7c7cc" };
+
+/* ── small components ────────────────────────────────────────────────────── */
+function ScoreRing({ score }) {
   const severity = getSeverity(score);
-  const colors = { critical: "#ff2d55", high: "#ff9500", medium: "#30d158", low: "#636366" };
+  const color = sevColor[severity];
+  const r = 18, c = 2 * Math.PI * r, offset = c - (score / 100) * c;
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-      <div style={{ width: 80, height: 6, background: "#1c1c1e", borderRadius: 3, overflow: "hidden" }}>
-        <div style={{ width: `${score}%`, height: "100%", background: colors[severity], borderRadius: 3, transition: "width 0.6s cubic-bezier(.4,0,.2,1)" }} />
-      </div>
-      <span style={{ fontFamily: "'JetBrains Mono', 'SF Mono', monospace", fontSize: 13, fontWeight: 700, color: colors[severity] }}>{score}</span>
+    <div style={{ position: "relative", width: 44, height: 44, flexShrink: 0 }}>
+      <svg width="44" height="44" style={{ transform: "rotate(-90deg)" }}>
+        <circle cx="22" cy="22" r={r} fill="none" stroke="#f0f0f5" strokeWidth="3" />
+        <circle cx="22" cy="22" r={r} fill="none" stroke={color} strokeWidth="3"
+          strokeDasharray={c} strokeDashoffset={offset} strokeLinecap="round"
+          style={{ transition: "stroke-dashoffset 0.8s cubic-bezier(.4,0,.2,1)" }} />
+      </svg>
+      <span style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center",
+        fontSize: 13, fontWeight: 700, color, fontFamily: "'JetBrains Mono', monospace" }}>{score}</span>
     </div>
   );
 }
 
-function DirectionBadge({ direction }) {
-  const config = {
-    BULLISH: { symbol: "▲", color: "#30d158", bg: "rgba(48,209,88,0.12)" },
-    BEARISH: { symbol: "▼", color: "#ff453a", bg: "rgba(255,69,58,0.12)" },
-    NEUTRAL: { symbol: "●", color: "#8e8e93", bg: "rgba(142,142,147,0.12)" },
+function DirectionPill({ direction }) {
+  const cfg = {
+    BULLISH:  { label: "Bullish",  icon: "↑", bg: "#e8f9ef", color: "#1a9d4a" },
+    BEARISH:  { label: "Bearish",  icon: "↓", bg: "#fdeaea", color: "#d63031" },
+    NEUTRAL:  { label: "Neutral",  icon: "–", bg: "#f0f0f5", color: "#8e8e93" },
   };
-  const c = config[direction] || config.NEUTRAL;
+  const c = cfg[direction] || cfg.NEUTRAL;
   return (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "2px 8px", borderRadius: 4, background: c.bg, color: c.color, fontSize: 11, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", letterSpacing: "0.03em" }}>
-      {c.symbol} {direction}
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 3, padding: "3px 10px",
+      borderRadius: 20, background: c.bg, color: c.color, fontSize: 12, fontWeight: 600 }}>
+      {c.icon} {c.label}
     </span>
   );
 }
 
-function SeverityDot({ score }) {
-  const severity = getSeverity(score);
-  const colors = { critical: "#ff2d55", high: "#ff9500", medium: "#30d158", low: "#48484a" };
-  const pulse = severity === "critical";
+function SourceTag({ source, tier }) {
   return (
-    <span style={{ position: "relative", display: "inline-block", width: 10, height: 10 }}>
-      {pulse && <span style={{ position: "absolute", inset: -3, borderRadius: "50%", background: colors[severity], opacity: 0.3, animation: "pulse 1.5s ease-in-out infinite" }} />}
-      <span style={{ position: "relative", display: "block", width: 10, height: 10, borderRadius: "50%", background: colors[severity] }} />
-    </span>
-  );
-}
-
-function TickerChip({ ticker }) {
-  return (
-    <span style={{ display: "inline-block", padding: "1px 6px", borderRadius: 3, background: "rgba(10,132,255,0.15)", color: "#0a84ff", fontSize: 11, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", letterSpacing: "0.04em" }}>
-      ${ticker}
-    </span>
-  );
-}
-
-function SourceBadge({ source, tier }) {
-  const tierColors = { 1: "#ffd60a", 2: "#8e8e93", 3: "#48484a" };
-  return (
-    <span style={{ fontSize: 11, color: "#8e8e93", display: "inline-flex", alignItems: "center", gap: 4 }}>
-      <span style={{ width: 5, height: 5, borderRadius: "50%", background: tierColors[tier] || "#48484a", display: "inline-block" }} />
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12, color: "#8e8e93" }}>
+      <span style={{ width: 5, height: 5, borderRadius: "50%",
+        background: tier === 1 ? "#f5a623" : tier === 2 ? "#c7c7cc" : "#e5e5ea",
+        display: "inline-block" }} />
       {source}
     </span>
   );
 }
 
-function EventRow({ event, isNew }) {
+function TickerPill({ ticker, priceData }) {
+  const pd = priceData || {};
+  const up = pd.change_pct >= 0;
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "4px 10px",
+      borderRadius: 10, background: "#f0f0f5", fontSize: 12, fontWeight: 600 }}>
+      <span style={{ color: "#0066ff" }}>${ticker}</span>
+      {pd.price != null && (
+        <span style={{ color: up ? "#1a9d4a" : "#d63031", fontFamily: "'JetBrains Mono', monospace", fontSize: 11 }}>
+          {pd.price.toFixed(2)} <span style={{ fontSize: 10 }}>{up ? "+" : ""}{pd.change_pct}%</span>
+        </span>
+      )}
+    </span>
+  );
+}
+
+/* ── buy/sell signal badge ───────────────────────────────────────────────── */
+function SignalBadge({ signal, confidence }) {
+  if (!signal) return null;
+  const cfg = {
+    BUY:  { bg: "#e8f9ef", border: "#b8edca", color: "#1a9d4a", icon: "●" },
+    SELL: { bg: "#fdeaea", border: "#f5c6c6", color: "#d63031", icon: "●" },
+    HOLD: { bg: "#f0f0f5", border: "#e5e5ea", color: "#8e8e93", icon: "●" },
+  };
+  const c = cfg[signal] || cfg.HOLD;
+  const label =
+    signal === "BUY" ? (
+      confidence >= 85 ? "Strong Buy" : confidence >= 65 ? "Buy" :
+      confidence >= 50 ? "Moderate Buy" : "Speculative"
+    ) : signal === "SELL" ? (
+      confidence >= 75 ? "Strong Sell" : confidence >= 50 ? "Sell" : "Weak Sell"
+    ) : "Hold";
+
+  return (
+    <div style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "6px 14px",
+      borderRadius: 12, background: c.bg, border: `1px solid ${c.border}` }}>
+      <span style={{ fontSize: 8, color: c.color }}>{c.icon}</span>
+      <span style={{ fontSize: 13, fontWeight: 700, color: c.color }}>{signal}</span>
+      <span style={{ fontSize: 12, color: c.color, opacity: 0.7 }}>{confidence}%</span>
+      <span style={{ fontSize: 11, color: c.color, opacity: 0.6, fontWeight: 500 }}>{label}</span>
+    </div>
+  );
+}
+
+/* ── event card ──────────────────────────────────────────────────────────── */
+function EventCard({ event, isNew }) {
   const severity = getSeverity(event.score);
-  const borderColors = { critical: "rgba(255,45,85,0.4)", high: "rgba(255,149,0,0.2)", medium: "rgba(48,209,88,0.1)", low: "transparent" };
   const [timeAgo, setTimeAgo] = useState(getTimeAgo(event.ts));
-  useEffect(() => { const i = setInterval(() => setTimeAgo(getTimeAgo(event.ts)), 5000); return () => clearInterval(i); }, [event.ts]);
+  useEffect(() => {
+    const i = setInterval(() => setTimeAgo(getTimeAgo(event.ts)), 5000);
+    return () => clearInterval(i);
+  }, [event.ts]);
 
   return (
     <div style={{
-      padding: "14px 18px",
-      borderBottom: "1px solid #1c1c1e",
-      borderLeft: `3px solid ${borderColors[severity]}`,
-      background: isNew ? "rgba(255,214,10,0.04)" : "transparent",
-      transition: "background 1.5s ease",
-      animation: isNew ? "slideIn 0.4s cubic-bezier(.4,0,.2,1)" : "none",
-      cursor: "pointer",
+      background: "#ffffff",
+      borderRadius: 16,
+      padding: "20px 22px",
+      marginBottom: 10,
+      boxShadow: isNew ? "0 0 0 2px rgba(0,102,255,0.15), 0 2px 12px rgba(0,0,0,0.06)" : "0 1px 4px rgba(0,0,0,0.04)",
+      transition: "box-shadow 0.3s ease, transform 0.2s ease",
+      animation: isNew ? "fadeInUp 0.4s ease" : "none",
+      borderLeft: severity === "critical" ? "4px solid #eb4d3d" : severity === "high" ? "4px solid #f5a623" : "none",
+      cursor: "default",
     }}
-    onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.03)"}
-    onMouseLeave={e => e.currentTarget.style.background = isNew ? "rgba(255,214,10,0.02)" : "transparent"}
+    onMouseEnter={e => { e.currentTarget.style.boxShadow = "0 4px 20px rgba(0,0,0,0.08)"; e.currentTarget.style.transform = "translateY(-1px)"; }}
+    onMouseLeave={e => { e.currentTarget.style.boxShadow = isNew ? "0 0 0 2px rgba(0,102,255,0.15), 0 2px 12px rgba(0,0,0,0.06)" : "0 1px 4px rgba(0,0,0,0.04)"; e.currentTarget.style.transform = "translateY(0)"; }}
     >
-      <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
-        <div style={{ paddingTop: 5 }}><SeverityDot score={event.score} /></div>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
-            <DirectionBadge direction={event.direction} />
-            <span style={{ fontSize: 11, color: "#636366", fontFamily: "'JetBrains Mono', monospace", background: "rgba(99,99,102,0.12)", padding: "1px 6px", borderRadius: 3 }}>
-              {event.type.replace(/_/g, " ")}
-            </span>
-            <SourceBadge source={event.source} tier={event.tier} />
-            <span style={{ fontSize: 11, color: "#48484a", marginLeft: "auto", whiteSpace: "nowrap" }}>{timeAgo}</span>
-          </div>
-          <p style={{ margin: 0, fontSize: 14, lineHeight: 1.45, color: severity === "critical" ? "#f5f5f7" : severity === "low" ? "#8e8e93" : "#d1d1d6", fontWeight: severity === "critical" ? 600 : 400 }}>
-            {event.url
-              ? <a href={event.url} target="_blank" rel="noopener noreferrer" style={{ color: "inherit", textDecoration: "none" }}
-                  onMouseEnter={e => e.currentTarget.style.textDecoration = "underline"}
-                  onMouseLeave={e => e.currentTarget.style.textDecoration = "none"}>
-                  {event.headline}
-                </a>
-              : event.headline}
-          </p>
-          {event.brief && (
-            <p style={{ margin: "6px 0 0", fontSize: 12, color: "#8e8e93", lineHeight: 1.4, fontStyle: "italic" }}>
-              {event.brief}
-            </p>
-          )}
-          {event.reasoning && event.reasoning.length > 0 && (
-            <ul style={{ margin: "6px 0 0", padding: "0 0 0 14px", listStyle: "none" }}>
-              {event.reasoning.map((r, i) => (
-                <li key={i} style={{ fontSize: 12, color: "#aeaeb2", lineHeight: 1.45, marginBottom: 2, display: "flex", gap: 6 }}>
-                  <span style={{ color: "#636366", flexShrink: 0 }}>›</span>
-                  <span>{r}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-          {(event.risk || event.time_horizon) && (
-            <div style={{ display: "flex", gap: 10, marginTop: 6, flexWrap: "wrap", alignItems: "center" }}>
-              {event.time_horizon && (
-                <span style={{ fontSize: 10, padding: "2px 7px", borderRadius: 3,
-                  background: "rgba(10,132,255,0.1)", color: "#0a84ff",
-                  border: "1px solid rgba(10,132,255,0.2)", fontFamily: "'JetBrains Mono', monospace" }}>
-                  ⏱ {event.time_horizon}
-                </span>
-              )}
-              {event.risk && (
-                <span style={{ fontSize: 11, color: "#ff9f0a", lineHeight: 1.35 }}>
-                  ⚠ {event.risk}
-                </span>
-              )}
+      {/* top row: direction, type, source, time, score ring */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+        <DirectionPill direction={event.direction} />
+        <span style={{ fontSize: 11, color: "#8e8e93", background: "#f0f0f5", padding: "3px 8px", borderRadius: 6, fontWeight: 500 }}>
+          {event.type.replace(/_/g, " ")}
+        </span>
+        <SourceTag source={event.source} tier={event.tier} />
+        <span style={{ fontSize: 12, color: "#aeaeb2", marginLeft: "auto", whiteSpace: "nowrap" }}>{timeAgo}</span>
+        <ScoreRing score={event.score} />
+      </div>
+
+      {/* headline */}
+      <h3 style={{ margin: "0 0 8px", fontSize: 16, fontWeight: 600, lineHeight: 1.4,
+        color: severity === "critical" ? "#1c1c1e" : "#2c2c2e" }}>
+        {event.url
+          ? <a href={event.url} target="_blank" rel="noopener noreferrer"
+              style={{ color: "inherit", textDecoration: "none" }}
+              onMouseEnter={e => e.currentTarget.style.color = "#0066ff"}
+              onMouseLeave={e => e.currentTarget.style.color = "inherit"}>
+              {event.headline}
+            </a>
+          : event.headline}
+      </h3>
+
+      {/* brief */}
+      {event.brief && (
+        <p style={{ margin: "0 0 12px", fontSize: 13, color: "#636366", lineHeight: 1.55 }}>
+          {event.brief}
+        </p>
+      )}
+
+      {/* reasoning bullets */}
+      {event.reasoning && event.reasoning.length > 0 && (
+        <div style={{ margin: "0 0 12px", padding: "12px 16px", borderRadius: 12, background: "#fafafa" }}>
+          {event.reasoning.map((r, i) => (
+            <div key={i} style={{ display: "flex", gap: 8, marginBottom: i < event.reasoning.length - 1 ? 6 : 0 }}>
+              <span style={{ color: "#0066ff", fontWeight: 600, fontSize: 14, lineHeight: "20px", flexShrink: 0 }}>›</span>
+              <span style={{ fontSize: 13, color: "#3c3c43", lineHeight: 1.5 }}>{r}</span>
             </div>
-          )}
-          {event.correlated_moves && event.correlated_moves.length > 0 && (
-            <div style={{ display: "flex", gap: 5, marginTop: 6, alignItems: "center", flexWrap: "wrap" }}>
-              <span style={{ fontSize: 10, color: "#48484a", fontFamily: "'JetBrains Mono', monospace" }}>MOVES WITH:</span>
-              {event.correlated_moves.map(t => (
-                <span key={t} style={{ fontSize: 10, padding: "1px 6px", borderRadius: 3,
-                  background: "rgba(99,99,102,0.15)", color: "#8e8e93",
-                  border: "1px solid rgba(99,99,102,0.25)", fontFamily: "'JetBrains Mono', monospace" }}>
-                  {t}
-                </span>
-              ))}
-            </div>
-          )}
-          {event.buy_signal && (
-            <div style={{ marginTop: 6, display: "inline-flex", alignItems: "center", gap: 6,
-              padding: "3px 10px", borderRadius: 4,
-              background: event.buy_signal === "BUY" ? "rgba(48,209,88,0.12)" : event.buy_signal === "SELL" ? "rgba(255,69,58,0.12)" : "rgba(99,99,102,0.12)",
-              border: `1px solid ${event.buy_signal === "BUY" ? "rgba(48,209,88,0.3)" : event.buy_signal === "SELL" ? "rgba(255,69,58,0.3)" : "rgba(99,99,102,0.3)"}`,
-            }}>
-              <span style={{ fontSize: 11, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace",
-                color: event.buy_signal === "BUY" ? "#30d158" : event.buy_signal === "SELL" ? "#ff453a" : "#8e8e93" }}>
-                {event.buy_signal}
-              </span>
-              <span style={{ fontSize: 11, color: "#636366", fontFamily: "'JetBrains Mono', monospace" }}>
-                {event.buy_confidence}% · {
-                  event.buy_signal === "BUY" ? (
-                    event.buy_confidence === 100 ? "SURE PURCHASE" :
-                    event.buy_confidence >= 95 ? "VERY HIGH CONVICTION" :
-                    event.buy_confidence >= 85 ? "HIGH CONFIDENCE" :
-                    event.buy_confidence >= 75 ? "STRONG BUY" :
-                    event.buy_confidence >= 65 ? "SOLID CONVICTION" :
-                    event.buy_confidence >= 50 ? "RECOMMENDED PURCHASE" :
-                    event.buy_confidence >= 41 ? "BORDERLINE BUY" :
-                    event.buy_confidence >= 26 ? "SPECULATIVE BUY" :
-                    event.buy_confidence >= 11 ? "WEAK SIGNAL" : "VERY LOW CONVICTION"
-                  ) : event.buy_signal === "SELL" ? (
-                    event.buy_confidence >= 85 ? "STRONG SELL" :
-                    event.buy_confidence >= 65 ? "CONFIDENT SELL" :
-                    event.buy_confidence >= 50 ? "RECOMMENDED SELL" : "SPECULATIVE SELL"
-                  ) : "NEUTRAL — HOLD"
-                }
-              </span>
-            </div>
-          )}
-          {event.stock_availability && event.tickers && event.tickers.length > 0 && (
-            <div style={{ display: "flex", gap: 5, marginTop: 5, flexWrap: "wrap" }}>
-              {event.tickers.map(t => {
-                const info = event.stock_availability[t];
-                if (!info) return null;
-                const platforms = [info.revolut && "Revolut", info.xtb && "XTB"].filter(Boolean);
-                return (
-                  <span key={t} style={{
-                    fontSize: 10, padding: "2px 6px", borderRadius: 3,
-                    background: platforms.length ? "rgba(48,209,88,0.1)" : "rgba(255,69,58,0.1)",
-                    color: platforms.length ? "#30d158" : "#ff453a",
-                    border: `1px solid ${platforms.length ? "rgba(48,209,88,0.2)" : "rgba(255,69,58,0.2)"}`,
-                    fontFamily: "'JetBrains Mono', monospace",
-                  }}>
-                    {t}: {platforms.length ? platforms.join(" · ") : "unavailable"}
-                  </span>
-                );
-              })}
-            </div>
-          )}
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-            {event.tickers.length > 0 ? event.tickers.map(t => {
-              const pd = event.price_data && event.price_data[t];
-              return (
-                <span key={t} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-                  <TickerChip ticker={t} />
-                  {pd && pd.price != null && (
-                    <span style={{ fontSize: 10, fontFamily: "'JetBrains Mono', monospace", color: pd.change_pct >= 0 ? "#30d158" : "#ff453a" }}>
-                      ${pd.price} {pd.change_pct != null ? `(${pd.change_pct >= 0 ? "+" : ""}${pd.change_pct}%)` : ""}
-                    </span>
-                  )}
-                </span>
-              );
-            }) : <span style={{ fontSize: 11, color: "#636366", fontStyle: "italic" }}>MACRO — Broad market</span>}
-            {event.etfs.length > 0 && (
-              <span style={{ fontSize: 11, color: "#48484a", marginLeft: 4 }}>
-                → {event.etfs.join(", ")}
-              </span>
-            )}
-            <div style={{ marginLeft: "auto" }}>
-              <ScoreBar score={event.score} />
-            </div>
-          </div>
+          ))}
         </div>
+      )}
+
+      {/* time horizon + risk */}
+      {(event.time_horizon || event.risk) && (
+        <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap", alignItems: "center" }}>
+          {event.time_horizon && (
+            <span style={{ fontSize: 11, padding: "4px 10px", borderRadius: 8,
+              background: "#eef4ff", color: "#0066ff", fontWeight: 600 }}>
+              {event.time_horizon}
+            </span>
+          )}
+          {event.risk && (
+            <span style={{ fontSize: 12, color: "#f5a623", fontWeight: 500, lineHeight: 1.4 }}>
+              ⚠ {event.risk}
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* correlated moves */}
+      {event.correlated_moves && event.correlated_moves.length > 0 && (
+        <div style={{ display: "flex", gap: 6, marginBottom: 12, alignItems: "center", flexWrap: "wrap" }}>
+          <span style={{ fontSize: 11, color: "#aeaeb2", fontWeight: 600 }}>Also moves</span>
+          {event.correlated_moves.map(t => (
+            <span key={t} style={{ fontSize: 11, padding: "3px 8px", borderRadius: 8,
+              background: "#f0f0f5", color: "#636366", fontWeight: 600 }}>
+              {t}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* signal badge */}
+      {event.buy_signal && (
+        <div style={{ marginBottom: 14 }}>
+          <SignalBadge signal={event.buy_signal} confidence={event.buy_confidence} />
+        </div>
+      )}
+
+      {/* availability badges */}
+      {event.stock_availability && event.tickers && event.tickers.length > 0 && (
+        <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
+          {event.tickers.map(t => {
+            const info = event.stock_availability[t];
+            if (!info) return null;
+            const platforms = [info.revolut && "Revolut", info.xtb && "XTB"].filter(Boolean);
+            return (
+              <span key={t} style={{
+                fontSize: 11, padding: "3px 10px", borderRadius: 8, fontWeight: 500,
+                background: platforms.length ? "#e8f9ef" : "#fdeaea",
+                color: platforms.length ? "#1a9d4a" : "#d63031",
+              }}>
+                {t}: {platforms.length ? platforms.join(" · ") : "unavailable"}
+              </span>
+            );
+          })}
+        </div>
+      )}
+
+      {/* tickers + prices + etfs row */}
+      <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+        {event.tickers.length > 0 ? event.tickers.map(t => {
+          const pd = event.price_data && event.price_data[t];
+          return <TickerPill key={t} ticker={t} priceData={pd} />;
+        }) : (
+          <span style={{ fontSize: 12, color: "#aeaeb2", fontStyle: "italic" }}>Macro — broad market</span>
+        )}
+        {event.etfs && event.etfs.length > 0 && (
+          <span style={{ fontSize: 11, color: "#aeaeb2", marginLeft: 4, fontWeight: 500 }}>
+            → {event.etfs.join(", ")}
+          </span>
+        )}
       </div>
     </div>
   );
 }
 
+/* ── sector heatmap ──────────────────────────────────────────────────────── */
 function SectorHeatmap({ events }) {
   const sectorData = {};
   events.forEach(e => {
@@ -254,31 +269,30 @@ function SectorHeatmap({ events }) {
     .slice(0, 12);
 
   if (sectors.length === 0) return null;
-
   const maxHeat = Math.max(...sectors.map(s => s.count * s.avg));
 
   return (
-    <div style={{ padding: "10px 18px 0" }}>
-      <div style={{ marginBottom: 6, display: "flex", alignItems: "center", gap: 8 }}>
-        <span style={{ fontSize: 10, color: "#636366", fontWeight: 600, letterSpacing: "0.1em", fontFamily: "'JetBrains Mono', monospace" }}>SECTOR HEAT</span>
-        <span style={{ fontSize: 10, color: "#3a3a3c", fontFamily: "'JetBrains Mono', monospace" }}>last {events.length} events</span>
+    <div style={{ background: "#ffffff", borderRadius: 16, padding: "18px 20px", marginBottom: 10,
+      boxShadow: "0 1px 4px rgba(0,0,0,0.04)" }}>
+      <div style={{ marginBottom: 10, display: "flex", alignItems: "center", gap: 8 }}>
+        <span style={{ fontSize: 13, fontWeight: 700, color: "#1c1c1e" }}>Sector Activity</span>
+        <span style={{ fontSize: 11, color: "#aeaeb2" }}>{events.length} events</span>
       </div>
-      <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
         {sectors.map(s => {
           const heat = s.count * s.avg / maxHeat;
           const dominant = s.bullish > s.bearish ? "bull" : s.bearish > s.bullish ? "bear" : "neutral";
-          const baseColor = dominant === "bull" ? [48, 209, 88] : dominant === "bear" ? [255, 69, 58] : [10, 132, 255];
-          const bg = `rgba(${baseColor[0]},${baseColor[1]},${baseColor[2]},${0.06 + heat * 0.2})`;
-          const border = `rgba(${baseColor[0]},${baseColor[1]},${baseColor[2]},${0.15 + heat * 0.35})`;
-          const textColor = `rgba(${baseColor[0]},${baseColor[1]},${baseColor[2]},${0.6 + heat * 0.4})`;
+          const colors = { bull: { bg: "#e8f9ef", text: "#1a9d4a" }, bear: { bg: "#fdeaea", text: "#d63031" }, neutral: { bg: "#eef4ff", text: "#0066ff" } };
+          const c = colors[dominant];
           return (
-            <div key={s.name} style={{ padding: "5px 10px", borderRadius: 5, background: bg, border: `1px solid ${border}`, cursor: "default" }}
-              title={`${s.count} events · avg score ${s.avg} · ${s.bullish}↑ ${s.bearish}↓`}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: textColor, fontFamily: "'JetBrains Mono', monospace", whiteSpace: "nowrap" }}>
-                {s.name}
-              </div>
-              <div style={{ fontSize: 9, color: "#48484a", fontFamily: "'JetBrains Mono', monospace", marginTop: 1 }}>
-                {s.count}× · {s.avg}
+            <div key={s.name} style={{ padding: "8px 14px", borderRadius: 12, background: c.bg,
+              cursor: "default", opacity: 0.5 + heat * 0.5, transition: "transform 0.15s ease" }}
+              title={`${s.count} events · avg ${s.avg} · ${s.bullish}↑ ${s.bearish}↓`}
+              onMouseEnter={e => e.currentTarget.style.transform = "scale(1.04)"}
+              onMouseLeave={e => e.currentTarget.style.transform = "scale(1)"}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: c.text }}>{s.name}</div>
+              <div style={{ fontSize: 10, color: c.text, opacity: 0.6, marginTop: 2, fontFamily: "'JetBrains Mono', monospace" }}>
+                {s.count}× · avg {s.avg}
               </div>
             </div>
           );
@@ -288,39 +302,43 @@ function SectorHeatmap({ events }) {
   );
 }
 
+/* ── stats bar ───────────────────────────────────────────────────────────── */
 function StatsBar({ events }) {
   const critical = events.filter(e => e.score >= 80).length;
   const bullish = events.filter(e => e.direction === "BULLISH").length;
   const bearish = events.filter(e => e.direction === "BEARISH").length;
   const avgScore = events.length > 0 ? Math.round(events.reduce((s, e) => s + e.score, 0) / events.length) : 0;
-  const topSectors = [...new Set(events.flatMap(e => e.sectors))].slice(0, 4);
+
+  const stats = [
+    { label: "Events", value: events.length, color: "#1c1c1e" },
+    { label: "Critical", value: critical, color: "#eb4d3d" },
+    { label: "Bullish", value: bullish, color: "#1a9d4a" },
+    { label: "Bearish", value: bearish, color: "#d63031" },
+    { label: "Avg Score", value: avgScore, color: "#0066ff" },
+  ];
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 1, background: "#1c1c1e", borderRadius: 10, overflow: "hidden", marginBottom: 2 }}>
-      {[
-        { label: "EVENTS", value: events.length, color: "#f5f5f7" },
-        { label: "CRITICAL", value: critical, color: "#ff2d55" },
-        { label: "BULLISH", value: bullish, color: "#30d158" },
-        { label: "BEARISH", value: bearish, color: "#ff453a" },
-        { label: "AVG SCORE", value: avgScore, color: "#0a84ff" },
-      ].map(s => (
-        <div key={s.label} style={{ padding: "12px 16px", background: "#0d0d0d", textAlign: "center" }}>
-          <div style={{ fontSize: 10, color: "#636366", letterSpacing: "0.1em", fontWeight: 600, marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>{s.label}</div>
-          <div style={{ fontSize: 22, fontWeight: 800, color: s.color, fontFamily: "'JetBrains Mono', monospace" }}>{s.value}</div>
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 8, marginBottom: 10 }}>
+      {stats.map(s => (
+        <div key={s.label} style={{ background: "#ffffff", borderRadius: 14, padding: "14px 12px",
+          textAlign: "center", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" }}>
+          <div style={{ fontSize: 11, color: "#aeaeb2", fontWeight: 600, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.05em" }}>{s.label}</div>
+          <div style={{ fontSize: 24, fontWeight: 800, color: s.color, fontFamily: "'JetBrains Mono', monospace" }}>{s.value}</div>
         </div>
       ))}
     </div>
   );
 }
 
+/* ── filter bar ──────────────────────────────────────────────────────────── */
 function FilterBar({ filter, setFilter, timeFilter, setTimeFilter, threshold, setThreshold }) {
   const filters = [
     { key: "all", label: "All" },
-    { key: "critical", label: "Critical 80+" },
-    { key: "high", label: "High 60+" },
-    { key: "bullish", label: "▲ Bullish" },
-    { key: "bearish", label: "▼ Bearish" },
-    { key: "buy", label: "BUY signals" },
+    { key: "critical", label: "Critical" },
+    { key: "high", label: "High" },
+    { key: "bullish", label: "↑ Bullish" },
+    { key: "bearish", label: "↓ Bearish" },
+    { key: "buy", label: "BUY Signals" },
   ];
   const timeFilters = [
     { key: "all", label: "All time" },
@@ -328,44 +346,40 @@ function FilterBar({ filter, setFilter, timeFilter, setTimeFilter, threshold, se
     { key: "4h", label: "4h" },
     { key: "24h", label: "24h" },
   ];
+
   return (
-    <div style={{ display: "flex", flexDirection: "column", borderBottom: "1px solid #1c1c1e" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 18px 4px", flexWrap: "wrap" }}>
+    <div style={{ background: "#ffffff", borderRadius: 14, padding: "14px 18px", marginBottom: 10,
+      boxShadow: "0 1px 4px rgba(0,0,0,0.04)" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
         {filters.map(f => (
-          <button
-            key={f.key}
-            onClick={() => setFilter(f.key)}
-            style={{
-              padding: "5px 12px", borderRadius: 6, border: "none", cursor: "pointer",
-              fontSize: 12, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace",
-              background: filter === f.key
-                ? f.key === "buy" ? "rgba(48,209,88,0.2)" : "rgba(10,132,255,0.2)"
-                : "rgba(99,99,102,0.08)",
-              color: filter === f.key
-                ? f.key === "buy" ? "#30d158" : "#0a84ff"
-                : "#8e8e93",
-              transition: "all 0.15s ease",
-            }}
-          >
-            {f.label}
-          </button>
+          <button key={f.key} onClick={() => setFilter(f.key)} style={{
+            padding: "6px 16px", borderRadius: 20, border: "none", cursor: "pointer",
+            fontSize: 13, fontWeight: 600,
+            background: filter === f.key
+              ? f.key === "buy" ? "#e8f9ef" : "#0066ff"
+              : "#f0f0f5",
+            color: filter === f.key
+              ? f.key === "buy" ? "#1a9d4a" : "#ffffff"
+              : "#8e8e93",
+            transition: "all 0.2s ease",
+          }}>{f.label}</button>
         ))}
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontSize: 11, color: "#636366", fontFamily: "'JetBrains Mono', monospace" }}>THRESHOLD</span>
+          <span style={{ fontSize: 12, color: "#aeaeb2", fontWeight: 500 }}>Min score</span>
           <input type="range" min={0} max={100} value={threshold} onChange={e => setThreshold(Number(e.target.value))}
-            style={{ width: 80, accentColor: "#ff2d55" }} />
-          <span style={{ fontSize: 12, fontWeight: 700, color: "#ff2d55", fontFamily: "'JetBrains Mono', monospace", minWidth: 24 }}>{threshold}</span>
+            style={{ width: 80, accentColor: "#0066ff" }} />
+          <span style={{ fontSize: 13, fontWeight: 700, color: "#0066ff", fontFamily: "'JetBrains Mono', monospace", minWidth: 24 }}>{threshold}</span>
         </div>
       </div>
-      <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 18px 8px" }}>
-        <span style={{ fontSize: 10, color: "#48484a", fontFamily: "'JetBrains Mono', monospace", marginRight: 4 }}>TIME</span>
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <span style={{ fontSize: 11, color: "#aeaeb2", fontWeight: 600, marginRight: 4 }}>Time</span>
         {timeFilters.map(t => (
           <button key={t.key} onClick={() => setTimeFilter(t.key)} style={{
-            padding: "3px 10px", borderRadius: 5, border: "none", cursor: "pointer",
-            fontSize: 11, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace",
-            background: timeFilter === t.key ? "rgba(255,214,10,0.15)" : "rgba(99,99,102,0.08)",
-            color: timeFilter === t.key ? "#ffd60a" : "#636366",
-            transition: "all 0.15s ease",
+            padding: "4px 12px", borderRadius: 20, border: "none", cursor: "pointer",
+            fontSize: 12, fontWeight: 600,
+            background: timeFilter === t.key ? "#fff3e0" : "#f0f0f5",
+            color: timeFilter === t.key ? "#f5a623" : "#aeaeb2",
+            transition: "all 0.2s ease",
           }}>{t.label}</button>
         ))}
       </div>
@@ -373,8 +387,9 @@ function FilterBar({ filter, setFilter, timeFilter, setTimeFilter, threshold, se
   );
 }
 
+/* ── main app ────────────────────────────────────────────────────────────── */
 export default function NYSEImpactScreener() {
-  const [events, setEvents] = useState(DUMMY_EVENTS);
+  const [events, setEvents] = useState([]);
   const [newIds, setNewIds] = useState(new Set());
   const [filter, setFilter] = useState("all");
   const [timeFilter, setTimeFilter] = useState("all");
@@ -385,19 +400,12 @@ export default function NYSEImpactScreener() {
   const wsRef = useRef(null);
   const reconnectTimerRef = useRef(null);
 
-  // WebSocket connection to Python backend
   useEffect(() => {
     let retryDelay = 1000;
-
     function connect() {
       const ws = new WebSocket("ws://localhost:8765");
       wsRef.current = ws;
-
-      ws.onopen = () => {
-        setWsStatus("live");
-        retryDelay = 1000;
-      };
-
+      ws.onopen = () => { setWsStatus("live"); retryDelay = 1000; };
       ws.onmessage = (e) => {
         if (!isLive) return;
         try {
@@ -405,31 +413,16 @@ export default function NYSEImpactScreener() {
           setEvents(prev => [event, ...prev]);
           setNewIds(prev => new Set([...prev, event.id]));
           setTimeout(() => setNewIds(prev => { const n = new Set(prev); n.delete(event.id); return n; }), 3000);
-        } catch (err) {
-          console.warn("Failed to parse WebSocket message", err);
-        }
+        } catch (err) { console.warn("WS parse error", err); }
       };
-
       ws.onclose = () => {
         setWsStatus("disconnected");
-        reconnectTimerRef.current = setTimeout(() => {
-          retryDelay = Math.min(retryDelay * 2, 30000);
-          connect();
-        }, retryDelay);
+        reconnectTimerRef.current = setTimeout(() => { retryDelay = Math.min(retryDelay * 2, 30000); connect(); }, retryDelay);
       };
-
       ws.onerror = () => { ws.close(); };
     }
-
     connect();
-
-    return () => {
-      clearTimeout(reconnectTimerRef.current);
-      if (wsRef.current) {
-        wsRef.current.onclose = null;
-        wsRef.current.close();
-      }
-    };
+    return () => { clearTimeout(reconnectTimerRef.current); if (wsRef.current) { wsRef.current.onclose = null; wsRef.current.close(); } };
   }, []);
 
   const filtered = events.filter(e => {
@@ -447,45 +440,48 @@ export default function NYSEImpactScreener() {
   });
 
   return (
-    <div style={{ minHeight: "100vh", background: "#000000", color: "#f5f5f7", fontFamily: "'SF Pro Display', -apple-system, 'Helvetica Neue', sans-serif" }}>
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&display=swap');
-        @keyframes pulse { 0%, 100% { transform: scale(1); opacity: 0.3; } 50% { transform: scale(1.8); opacity: 0; } }
-        @keyframes slideIn { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
-        @keyframes liveDot { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
-        ::-webkit-scrollbar { width: 6px; }
-        ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: #2c2c2e; border-radius: 3px; }
-        * { box-sizing: border-box; }
-      `}</style>
+    <div style={{ minHeight: "100vh", background: "#f2f2f7", paddingBottom: 60 }}>
 
-      {/* Header */}
-      <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #1c1c1e" }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+      {/* ── header ───────────────────────────────────────────────────── */}
+      <div style={{ background: "#ffffff", padding: "20px 28px", marginBottom: 10,
+        boxShadow: "0 1px 4px rgba(0,0,0,0.04)", position: "sticky", top: 0, zIndex: 100 }}>
+        <div style={{ maxWidth: 1100, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-            <div style={{ width: 36, height: 36, borderRadius: 8, background: "linear-gradient(135deg, #ff2d55, #ff6b35)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, fontWeight: 800 }}>⚡</div>
+            <div style={{ width: 40, height: 40, borderRadius: 12, background: "linear-gradient(135deg, #0066ff, #5856d6)",
+              display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, color: "#fff" }}>⚡</div>
             <div>
-              <h1 style={{ margin: 0, fontSize: 18, fontWeight: 700, letterSpacing: "-0.02em", color: "#f5f5f7" }}>NYSE Impact Screener</h1>
-              <p style={{ margin: 0, fontSize: 12, color: "#636366", fontFamily: "'JetBrains Mono', monospace" }}>Real-Time Market-Moving News Intelligence</p>
+              <h1 style={{ fontSize: 20, fontWeight: 800, color: "#1c1c1e", letterSpacing: "-0.02em" }}>Impact Screener</h1>
+              <p style={{ fontSize: 12, color: "#aeaeb2", fontWeight: 500, marginTop: 1 }}>Real-time market intelligence</p>
             </div>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <span style={{ width: 7, height: 7, borderRadius: "50%", background: wsStatus === "live" ? "#30d158" : wsStatus === "disconnected" ? "#ff453a" : "#ff9500", animation: wsStatus === "live" ? "liveDot 1.5s ease-in-out infinite" : "none" }} />
-              <span style={{ fontSize: 12, fontWeight: 600, color: wsStatus === "live" ? "#30d158" : wsStatus === "disconnected" ? "#ff453a" : "#ff9500", fontFamily: "'JetBrains Mono', monospace" }}>{wsStatus === "live" ? "LIVE" : wsStatus === "disconnected" ? "DISCONNECTED" : "CONNECTING..."}</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            {/* live indicator */}
+            <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 14px",
+              borderRadius: 20, background: wsStatus === "live" ? "#e8f9ef" : wsStatus === "disconnected" ? "#fdeaea" : "#fff3e0" }}>
+              <span style={{ width: 7, height: 7, borderRadius: "50%",
+                background: wsStatus === "live" ? "#1a9d4a" : wsStatus === "disconnected" ? "#d63031" : "#f5a623",
+                animation: wsStatus === "live" ? "pulse 1.5s ease-in-out infinite" : "none" }} />
+              <span style={{ fontSize: 12, fontWeight: 600,
+                color: wsStatus === "live" ? "#1a9d4a" : wsStatus === "disconnected" ? "#d63031" : "#f5a623" }}>
+                {wsStatus === "live" ? "Live" : wsStatus === "disconnected" ? "Offline" : "Connecting..."}
+              </span>
             </div>
-            {["csv", "json"].map(fmt => (
-              <a key={fmt} href={`http://localhost:8766/download/${fmt}`} download
-                style={{ padding: "6px 14px", borderRadius: 6, border: "1px solid #2c2c2e",
-                  background: "transparent", color: "#8e8e93", fontSize: 12, fontWeight: 600,
-                  cursor: "pointer", fontFamily: "'JetBrains Mono', monospace",
-                  textDecoration: "none", display: "inline-flex", alignItems: "center" }}>
-                ↓ {fmt.toUpperCase()}
+            {/* download */}
+            {["CSV", "JSON"].map(fmt => (
+              <a key={fmt} href={`http://localhost:8766/download/${fmt.toLowerCase()}`} download
+                style={{ padding: "7px 16px", borderRadius: 10, border: "1px solid #e5e5ea",
+                  background: "#ffffff", color: "#636366", fontSize: 12, fontWeight: 600,
+                  cursor: "pointer", textDecoration: "none", transition: "all 0.15s ease" }}
+                onMouseEnter={e => { e.currentTarget.style.background = "#f0f0f5"; }}
+                onMouseLeave={e => { e.currentTarget.style.background = "#ffffff"; }}>
+                ↓ {fmt}
               </a>
             ))}
+            {/* pause */}
             <button onClick={() => setIsLive(l => !l)} style={{
-              padding: "6px 14px", borderRadius: 6, border: "1px solid #2c2c2e", background: "transparent",
-              color: "#8e8e93", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "'JetBrains Mono', monospace",
+              padding: "7px 18px", borderRadius: 10, border: "none", cursor: "pointer",
+              background: isLive ? "#f0f0f5" : "#0066ff", color: isLive ? "#636366" : "#ffffff",
+              fontSize: 12, fontWeight: 600, transition: "all 0.15s ease",
             }}>
               {isLive ? "Pause" : "Resume"}
             </button>
@@ -493,39 +489,39 @@ export default function NYSEImpactScreener() {
         </div>
       </div>
 
-      {/* Stats */}
-      <div style={{ padding: "12px 18px 0" }}>
+      {/* ── content ──────────────────────────────────────────────────── */}
+      <div style={{ maxWidth: 1100, margin: "0 auto", padding: "0 16px" }}>
         <StatsBar events={events} />
+        <SectorHeatmap events={events} />
+        <FilterBar filter={filter} setFilter={setFilter} timeFilter={timeFilter}
+          setTimeFilter={setTimeFilter} threshold={threshold} setThreshold={setThreshold} />
+
+        {/* feed */}
+        <div ref={feedRef}>
+          {filtered.length === 0 ? (
+            <div style={{ background: "#ffffff", borderRadius: 16, padding: 60, textAlign: "center",
+              boxShadow: "0 1px 4px rgba(0,0,0,0.04)" }}>
+              <div style={{ fontSize: 40, marginBottom: 12 }}>📭</div>
+              <div style={{ fontSize: 16, fontWeight: 600, color: "#3c3c43" }}>No events match your filters</div>
+              <div style={{ fontSize: 13, color: "#aeaeb2", marginTop: 4 }}>Try lowering the threshold or widening your filter</div>
+            </div>
+          ) : (
+            filtered.map(event => (
+              <EventCard key={event.id} event={event} isNew={newIds.has(event.id)} />
+            ))
+          )}
+        </div>
       </div>
 
-      {/* Sector Heatmap */}
-      <SectorHeatmap events={events} />
-
-      {/* Filters */}
-      <FilterBar filter={filter} setFilter={setFilter} timeFilter={timeFilter} setTimeFilter={setTimeFilter} threshold={threshold} setThreshold={setThreshold} />
-
-      {/* Event Feed */}
-      <div ref={feedRef} style={{ maxHeight: "calc(100vh - 320px)", overflowY: "auto" }}>
-        {filtered.length === 0 ? (
-          <div style={{ padding: 60, textAlign: "center", color: "#48484a" }}>
-            <div style={{ fontSize: 36, marginBottom: 12 }}>🔇</div>
-            <div style={{ fontSize: 14, fontWeight: 500 }}>No events match current filters</div>
-            <div style={{ fontSize: 12, color: "#3a3a3c", marginTop: 4 }}>Try lowering the threshold or changing the filter</div>
-          </div>
-        ) : (
-          filtered.map(event => (
-            <EventRow key={event.id} event={event} isNew={newIds.has(event.id)} />
-          ))
-        )}
-      </div>
-
-      {/* Footer */}
-      <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, padding: "8px 18px", borderTop: "1px solid #1c1c1e", background: "rgba(0,0,0,0.9)", backdropFilter: "blur(20px)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <span style={{ fontSize: 11, color: "#3a3a3c", fontFamily: "'JetBrains Mono', monospace" }}>
-          Pipeline: Kafka → FinBERT → XGBoost → Claude Sonnet
+      {/* ── footer ───────────────────────────────────────────────────── */}
+      <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, padding: "10px 24px",
+        background: "rgba(255,255,255,0.85)", backdropFilter: "blur(20px)", borderTop: "1px solid #e5e5ea",
+        display: "flex", justifyContent: "center", gap: 24 }}>
+        <span style={{ fontSize: 11, color: "#aeaeb2" }}>
+          RSS → Entity Extraction → Scoring → Claude Sonnet → WebSocket
         </span>
-        <span style={{ fontSize: 11, color: "#3a3a3c", fontFamily: "'JetBrains Mono', monospace" }}>
-          Avg latency: {(events.reduce((s, e) => s + e.latency, 0) / events.length).toFixed(1)}ms
+        <span style={{ fontSize: 11, color: "#aeaeb2", fontFamily: "'JetBrains Mono', monospace" }}>
+          {events.length > 0 ? `avg ${(events.reduce((s, e) => s + (e.latency || 0), 0) / events.length).toFixed(0)}ms` : "–"}
         </span>
       </div>
     </div>
