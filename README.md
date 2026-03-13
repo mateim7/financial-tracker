@@ -18,13 +18,45 @@ Real-time market-moving news screener with AI-powered buy/sell signals and stock
 
 ## Setup
 
-### 1. Install Python dependencies
+### Option A: Docker (recommended)
+
+The easiest way to run everything with a single command.
+
+**Prerequisites:** [Docker](https://docs.docker.com/get-docker/) and [Docker Compose](https://docs.docker.com/compose/install/) installed.
+
+```bash
+# Set your API key
+export ANTHROPIC_API_KEY="sk-ant-your-key-here"
+
+# Build and start both services
+docker compose up --build
+```
+
+This starts:
+- **Backend** (Python) on ports `8765` (WebSocket) and `8766` (HTTP API)
+- **Frontend** (React via Nginx) on port `3000`
+
+Open [http://localhost:3000](http://localhost:3000) in your browser.
+
+To run in the background:
+```bash
+docker compose up --build -d
+```
+
+To stop:
+```bash
+docker compose down
+```
+
+### Option B: Manual setup
+
+#### 1. Install Python dependencies
 
 ```bash
 pip install aiohttp feedparser anthropic websockets yfinance
 ```
 
-### 2. Set your Anthropic API key
+#### 2. Set your Anthropic API key
 
 **Windows (PowerShell):**
 ```powershell
@@ -38,13 +70,13 @@ export ANTHROPIC_API_KEY="sk-ant-your-key-here"
 
 > The key is never stored in code. You must set it each terminal session, or add it to your system environment variables permanently.
 
-### 3. Start the Python backend
+#### 3. Start the Python backend
 
 ```bash
 python AI_Analyzer/nyse_impact_screener.py
 ```
 
-### 4. Start the React dashboard (separate terminal)
+#### 4. Start the React dashboard (separate terminal)
 
 ```bash
 cd AI_Analyzer/nyse-screener
