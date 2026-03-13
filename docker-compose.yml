@@ -8,6 +8,9 @@ services:
       - "8766:8766"
     environment:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - FINNHUB_API_KEY=${FINNHUB_API_KEY:-}
+      - BENZINGA_API_KEY=${BENZINGA_API_KEY:-}
+      - POLYGON_API_KEY=${POLYGON_API_KEY:-}
     restart: unless-stopped
 
   frontend:

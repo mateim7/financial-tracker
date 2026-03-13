@@ -60,12 +60,16 @@ function DirectionPill({ direction }) {
   );
 }
 
-function SourceTag({ source, tier }) {
+function SourceTag({ source, tier, wsSource }) {
   return (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12, color: "#8e8e93" }}>
       <span style={{ width: 5, height: 5, borderRadius: "50%",
         background: tier === 1 ? "#f5a623" : tier === 2 ? "#c7c7cc" : "#e5e5ea",
         display: "inline-block" }} />
+      {wsSource && (
+        <span style={{ fontSize: 9, fontWeight: 700, color: "#fff", background: "#0066ff",
+          padding: "1px 4px", borderRadius: 3, letterSpacing: 0.5 }}>WS</span>
+      )}
       {source}
     </span>
   );
@@ -171,7 +175,7 @@ function EventCard({ event, isNew, trackedPairs, onTrack, onUntrack }) {
         <span style={{ fontSize: 11, color: "#8e8e93", background: "#f0f0f5", padding: "3px 8px", borderRadius: 6, fontWeight: 500 }}>
           {event.type.replace(/_/g, " ")}
         </span>
-        <SourceTag source={event.source} tier={event.tier} />
+        <SourceTag source={event.source} tier={event.tier} wsSource={event.ws_source} />
         <span style={{ fontSize: 12, color: "#aeaeb2", marginLeft: "auto", whiteSpace: "nowrap" }}>{timeAgo}</span>
         <ScoreRing score={event.score} />
       </div>
@@ -952,6 +956,11 @@ export default function NYSEImpactScreener() {
         <span style={{ fontSize: 11, color: "#aeaeb2" }}>
           RSS → Entity Extraction → Scoring → Claude Sonnet → WebSocket
         </span>
+        {events.some(e => e.ws_source) && (
+          <span style={{ fontSize: 10, color: "#0066ff", fontWeight: 600 }}>
+            WS feeds active
+          </span>
+        )}
         <span style={{ fontSize: 11, color: "#aeaeb2", fontFamily: "'JetBrains Mono', monospace" }}>
           {events.length > 0 ? `avg ${(events.reduce((s, e) => s + (e.latency || 0), 0) / events.length).toFixed(0)}ms` : "–"}
         </span>
