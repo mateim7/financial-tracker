@@ -25,7 +25,7 @@ import hashlib
 from dataclasses import dataclass, field, asdict
 from enum import Enum
 from typing import Optional
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from collections import defaultdict
 import websockets
 import websockets.server
@@ -38,12 +38,74 @@ from aiohttp import web as aiohttp_web
 WS_CLIENTS: set = set()
 
 async def ws_handler(websocket):
-    """Register a client and keep alive until it disconnects."""
+    """Register a client, send initial state, then listen for track/untrack commands."""
     WS_CLIENTS.add(websocket)
     try:
-        await websocket.wait_closed()
+        # Send current market state immediately on connect
+        if _LIVE_MARKET_STATE is not None:
+            await websocket.send(json.dumps({"type": "market_state", **_LIVE_MARKET_STATE.state}))
+        # Send current signal performance stats + tracked IDs
+        if _SIGNAL_TRACKER_DB is not None:
+            stats = _SIGNAL_TRACKER_DB.get_signal_stats()
+            recent = _SIGNAL_TRACKER_DB.get_recent_outcomes(20)
+            tracked = _SIGNAL_TRACKER_DB.get_tracked_ids()
+            await websocket.send(json.dumps({
+                "type": "signal_performance", "stats": stats, "recent": recent,
+                "tracked_ids": tracked,
+            }))
+        # Listen for incoming commands from the dashboard
+        async for message in websocket:
+            try:
+                msg = json.loads(message)
+                if msg.get("action") == "track_signal" and _SIGNAL_TRACKER is not None:
+                    await _SIGNAL_TRACKER.handle_track_request(msg)
+                elif msg.get("action") == "untrack_signal" and _SIGNAL_TRACKER_DB is not None:
+                    _SIGNAL_TRACKER_DB.remove_signal(msg.get("event_id"), msg.get("ticker"))
+                    await _broadcast_signal_performance()
+            except json.JSONDecodeError:
+                pass
     finally:
         WS_CLIENTS.discard(websocket)
+
+
+async def _broadcast_signal_performance():
+    """Helper to push updated signal stats to all clients."""
+    if not WS_CLIENTS or _SIGNAL_TRACKER_DB is None:
+        return
+    stats = _SIGNAL_TRACKER_DB.get_signal_stats()
+    recent = _SIGNAL_TRACKER_DB.get_recent_outcomes(20)
+    tracked = _SIGNAL_TRACKER_DB.get_tracked_ids()
+    payload = json.dumps({
+        "type": "signal_performance", "stats": stats, "recent": recent,
+        "tracked_ids": tracked,
+    })
+    disconnected = set()
+    for ws in WS_CLIENTS:
+        try:
+            await ws.send(payload)
+        except websockets.ConnectionClosed:
+            disconnected.add(ws)
+    WS_CLIENTS -= disconnected
+
+# Global references set in main() so WS handler can send state on connect
+_LIVE_MARKET_STATE: "LiveMarketState | None" = None
+_SIGNAL_TRACKER_DB: "EventDatabase | None" = None
+_SIGNAL_TRACKER: "SignalOutcomeTracker | None" = None
+
+
+async def broadcast_market_state():
+    """Push current market state (VIX, regime, SPY, etc.) to all WS clients."""
+    if not WS_CLIENTS or _LIVE_MARKET_STATE is None:
+        return
+    payload = json.dumps({"type": "market_state", **_LIVE_MARKET_STATE.state})
+    disconnected = set()
+    for ws in WS_CLIENTS:
+        try:
+            await ws.send(payload)
+        except websockets.ConnectionClosed:
+            disconnected.add(ws)
+    WS_CLIENTS -= disconnected
+
 
 async def broadcast_event(event):
     """Serialize a ScoredEvent and push it to all connected WebSocket clients."""
@@ -51,6 +113,7 @@ async def broadcast_event(event):
     if not WS_CLIENTS:
         return
     payload = {
+        "type":      "event",
         "id":        event.event_id,
         "ts":        event.timestamp * 1000,
         "headline":  event.headline,
@@ -71,6 +134,7 @@ async def broadcast_event(event):
         "risk":               event.risk,
         "time_horizon":       event.time_horizon,
         "correlated_moves":   event.correlated_moves,
+        "ticker_signals":     event.ticker_signals,
         "url":                event.url,
         "stock_availability": event.stock_availability,
         "price_data":         event.price_data,
@@ -108,11 +172,38 @@ async def http_handler(request):
     )
 
 
+async def signals_handler(request):
+    """Serves signal performance stats and recent outcomes as JSON."""
+    db = request.app["db"]
+    stats = db.get_signal_stats()
+    recent = db.get_recent_outcomes(30)
+    tracked = db.get_tracked_ids()
+    return aiohttp_web.Response(
+        text=json.dumps({"stats": stats, "recent": recent, "tracked_ids": tracked}, indent=2),
+        content_type="application/json",
+        headers={"Access-Control-Allow-Origin": "*"},
+    )
+
+
+async def events_handler(request):
+    """Serves recent events from the DB for page reload / initial load."""
+    db = request.app["db"]
+    limit = int(request.query.get("limit", 100))
+    events = db.get_recent_events(min(limit, 500))
+    return aiohttp_web.Response(
+        text=json.dumps(events),
+        content_type="application/json",
+        headers={"Access-Control-Allow-Origin": "*"},
+    )
+
+
 async def start_http_server(db: "EventDatabase"):
     app = aiohttp_web.Application()
     app["db"] = db
     app.router.add_get("/download/{fmt}", http_handler)
     app.router.add_get("/download", http_handler)
+    app.router.add_get("/api/signals", signals_handler)
+    app.router.add_get("/api/events", events_handler)
     runner = aiohttp_web.AppRunner(app)
     await runner.setup()
     await aiohttp_web.TCPSite(runner, "0.0.0.0", 8766).start()
@@ -380,6 +471,7 @@ class ScoredEvent:
     risk: str = ""
     time_horizon: str = ""
     correlated_moves: list[str] = field(default_factory=list)
+    ticker_signals: dict = field(default_factory=dict)  # {ticker: {"signal": "BUY"/"SELL"/"HOLD", "confidence": int}}
     url: str = ""
     stock_availability: dict = field(default_factory=dict)
     price_data: dict = field(default_factory=dict)
@@ -446,6 +538,7 @@ Return JSON with these exact fields:
   "risk": one sentence on the single biggest risk that could invalidate this signal,
   "time_horizon": one of "intraday" or "swing (1-3d)" or "medium-term (1-4w)",
   "correlated_moves": array of up to 4 ticker strings (beyond the primary tickers) that are likely to move in sympathy or inverse — e.g. sector peers, suppliers, competitors. Only include real NYSE/NASDAQ tickers.
+  "ticker_signals": object mapping each affected ticker AND each correlated_moves ticker to its own signal direction. CRITICAL: In macro/geopolitical events, different assets move in OPPOSITE directions due to capital rotation. For example, a Middle East escalation is BULLISH for oil (USO, XOM), gold (GLD), and defense (ITA) but BEARISH for airlines (DAL, UAL) and consumer discretionary. A trade war is BEARISH for importers but BULLISH for domestic competitors. You MUST analyze each ticker independently. Format: {{"TICKER": {{"signal": "BUY" or "SELL" or "HOLD", "confidence": 1-100}}}}. If all tickers move the same direction, they should still each have an entry. Never apply a blanket signal to all tickers without considering how the event specifically impacts each one.
 }}
 
 Only correct other scoring fields where automated scoring is clearly wrong. Return valid JSON only."""
@@ -486,6 +579,16 @@ Only correct other scoring fields where automated scoring is clearly wrong. Retu
                 scored.time_horizon = str(data["time_horizon"])
             if isinstance(data.get("correlated_moves"), list):
                 scored.correlated_moves = [str(t) for t in data["correlated_moves"][:4]]
+            if isinstance(data.get("ticker_signals"), dict):
+                ts = {}
+                for t, v in data["ticker_signals"].items():
+                    if isinstance(v, dict) and v.get("signal") in ("BUY", "SELL", "HOLD"):
+                        ts[str(t)] = {
+                            "signal": v["signal"],
+                            "confidence": max(1, min(100, int(v.get("confidence", scored.buy_confidence)))),
+                        }
+                if ts:
+                    scored.ticker_signals = ts
 
         except Exception as e:
             print(f"  [Claude] Scoring error: {e}")
@@ -537,7 +640,266 @@ Return ONLY JSON:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class StockAvailabilityChecker:
-    US_EXCHANGES = {"NYQ", "NMS", "NGM", "PCX", "BTS", "NYSE MKT"}
+    """Checks live prices via yfinance and broker availability against real ticker lists."""
+
+    # ── Revolut EU — ~2,200+ US stocks (sourced from community-maintained lists + official app)
+    # Updated March 2025. Covers S&P 500, NASDAQ-100, and popular mid/small-caps.
+    REVOLUT_TICKERS = {
+        # Mega-cap & large-cap (S&P 500 core)
+        "A", "AA", "AAL", "AAP", "AAPL", "ABBV", "ABEV", "ABNB", "ABT", "ACGL",
+        "ACN", "ADBE", "ADI", "ADM", "ADP", "ADSK", "AEE", "AEP", "AER", "AES",
+        "AFL", "AG", "AGNC", "AI", "AIG", "AKAM", "AL", "ALB", "ALC", "ALGN",
+        "ALL", "ALLE", "ALLY", "ALNY", "AMAT", "AMBA", "AMC", "AMCR", "AMD",
+        "AME", "AMGN", "AMP", "AMT", "AMZN", "AN", "ANET", "ANSS", "AON", "AOS",
+        "APA", "APD", "APH", "APO", "APPS", "APTV", "ARCC", "ARE", "ARES", "ARI",
+        "ARMK", "ARR", "ASAN", "ASML", "ATUS", "AU", "AVGO", "AVB", "AVY", "AXP",
+        "AXON", "AZN", "AZO",
+        # B
+        "BA", "BABA", "BAC", "BAH", "BAM", "BAP", "BAX", "BBAR", "BBD", "BBY",
+        "BDX", "BE", "BEN", "BEPC", "BG", "BHC", "BHP", "BIDU", "BIIB", "BILI",
+        "BIO", "BJ", "BK", "BKNG", "BKR", "BLK", "BLL", "BMA", "BMRN", "BMY",
+        "BN", "BNTX", "BOX", "BP", "BPOP", "BR", "BRK.B", "BRO", "BROS", "BSX",
+        "BTG", "BUD", "BVN", "BWA", "BX", "BYND",
+        # C
+        "C", "CABO", "CAG", "CAH", "CARR", "CARS", "CAT", "CB", "CBOE", "CBRE",
+        "CC", "CCI", "CCK", "CCL", "CDNS", "CDW", "CE", "CEG", "CELH", "CF",
+        "CFG", "CG", "CGNX", "CHGG", "CHD", "CHDN", "CHKP", "CHRD", "CHRW",
+        "CHTR", "CHWY", "CI", "CIEN", "CINF", "CL", "CLF", "CLH", "CLX", "CMA",
+        "CMCSA", "CME", "CMG", "CMI", "CMS", "CNC", "CNP", "COF", "COHR", "COLD",
+        "COMM", "COP", "COST", "COTY", "CPB", "CPRI", "CPRT", "CPT", "CRM",
+        "CROX", "CRSP", "CRWD", "CSCO", "CSGP", "CSX", "CTAS", "CTRA", "CTSH",
+        "CTVA", "CVE", "CVNA", "CVS", "CVX", "CW", "CWEN", "CZR",
+        # D
+        "D", "DAL", "DAR", "DASH", "DBX", "DD", "DDOG", "DE", "DECK", "DELL",
+        "DEO", "DFS", "DG", "DGX", "DHI", "DHR", "DIN", "DIS", "DISH", "DKNG",
+        "DLR", "DLTR", "DOCU", "DOV", "DOW", "DPZ", "DRI", "DT", "DTE", "DUK",
+        "DVA", "DVN", "DXC", "DXCM",
+        # E
+        "EA", "EBAY", "ECL", "ED", "EFX", "EIX", "EL", "ELAN", "ELV", "EMR",
+        "ENPH", "ENS", "EOG", "EPAM", "EQH", "EQIX", "EQNR", "EQR", "EQT",
+        "ES", "ESS", "ESTC", "ETN", "ETR", "ETSY", "EW", "EWBC", "EXAS", "EXC",
+        "EXEL", "EXPE", "EXR",
+        # F
+        "F", "FANG", "FAST", "FBIN", "FCX", "FDS", "FDX", "FE", "FERG", "FFIV",
+        "FHN", "FICO", "FIS", "FISV", "FIX", "FL", "FLT", "FMC", "FND", "FNF",
+        "FOXA", "FOX", "FROG", "FSLR", "FSLY", "FTNT", "FTV", "FUBO", "FUTU",
+        "FVRR",
+        # G
+        "GD", "GDDY", "GDS", "GE", "GILD", "GIS", "GL", "GLOB", "GLW", "GM",
+        "GME", "GMED", "GNRC", "GO", "GOLD", "GOOG", "GOOGL", "GPC", "GPN",
+        "GRAB", "GRMN", "GS", "GSK", "GT", "GTLS", "GWW", "GXO",
+        # H
+        "H", "HAL", "HAS", "HBAN", "HBI", "HCA", "HD", "HDB", "HELE", "HES",
+        "HIG", "HIMX", "HL", "HLF", "HLT", "HMC", "HOG", "HOLX", "HON", "HOOD",
+        "HPE", "HPQ", "HRB", "HRL", "HSBC", "HSIC", "HST", "HSY", "HUM", "HUN",
+        "HUYA", "HWM",
+        # I
+        "IAC", "IBM", "IBN", "ICE", "ICLR", "IDXX", "IEX", "IFF", "IGT", "IIPR",
+        "ILMN", "IMGN", "INCY", "INFY", "INTC", "INTU", "INVH", "IP", "IPG",
+        "IQ", "IR", "IRBT", "IRM", "ISRG", "IT", "ITW", "IVZ",
+        # J
+        "JBHT", "JBL", "JCI", "JD", "JEF", "JKS", "JLL", "JMIA", "JNJ", "JNPR",
+        "JOBY", "JPM", "JWN",
+        # K
+        "K", "KDP", "KEP", "KEY", "KEYS", "KGC", "KHC", "KIM", "KKR", "KLAC",
+        "KMB", "KMI", "KMX", "KNX", "KO", "KR", "KTOS", "KVUE", "KSS",
+        # L
+        "L", "LAD", "LAZR", "LCID", "LDOS", "LEA", "LEN", "LEVI", "LH", "LI",
+        "LIN", "LKQ", "LLY", "LMND", "LMT", "LNG", "LNT", "LOGI", "LOMA",
+        "LOPE", "LOW", "LRCX", "LSCC", "LULU", "LUV", "LVS", "LYB", "LYFT",
+        "LYV",
+        # M
+        "M", "MA", "MAA", "MAN", "MANU", "MAR", "MARA", "MAS", "MAT", "MCD",
+        "MCHP", "MCK", "MCO", "MDB", "MDLZ", "MDT", "MELI", "MET", "META",
+        "MFC", "MFG", "MGM", "MKL", "MLCO", "MLM", "MMC", "MMM", "MNST", "MO",
+        "MORN", "MOS", "MPC", "MPWR", "MPW", "MRK", "MRNA", "MRO", "MRVL", "MS",
+        "MSCI", "MSFT", "MSGS", "MSI", "MSTR", "MT", "MTB", "MTCH", "MTD", "MTG",
+        "MTH", "MTN", "MU", "MUFG", "MUR",
+        # N
+        "NAVI", "NBIX", "NCLH", "NCNO", "NDAQ", "NDSN", "NEE", "NEM", "NET",
+        "NFLX", "NIO", "NKE", "NKLA", "NLY", "NMR", "NOC", "NOV", "NOW", "NRG",
+        "NSC", "NTAP", "NTES", "NTNX", "NTRS", "NUE", "NVAX", "NVCR", "NVDA",
+        "NVR", "NWL", "NWSA", "NYT",
+        # O
+        "O", "OC", "ODP", "OHI", "OKE", "OKTA", "OLED", "OLN", "OMC", "ON",
+        "ONTO", "OPEN", "ORCL", "ORI", "ORLY", "OSK", "OTIS", "OVV", "OXY",
+        # P
+        "PAAS", "PANW", "PATH", "PAYC", "PAYX", "PBF", "PBR", "PCAR", "PCG",
+        "PDD", "PEG", "PEGA", "PENN", "PEP", "PFE", "PFG", "PFGC", "PG", "PGR",
+        "PH", "PHM", "PINS", "PKG", "PLD", "PLNT", "PLTR", "PLUG", "PM", "PNC",
+        "PNR", "POOL", "POST", "PPG", "PPL", "PRI", "PRU", "PSA", "PSX", "PTON",
+        "PVH", "PWR", "PYPL",
+        # Q
+        "QCOM", "QDEL", "QS", "QTWO",
+        # R
+        "RACE", "RBLX", "RCL", "RDDT", "REGN", "RF", "RH", "RHI", "RITM", "RIVN",
+        "RJF", "RL", "RMD", "RNG", "ROK", "ROKU", "ROST", "RPM", "RS", "RSG",
+        "RTX", "RUN", "RVMD", "RY",
+        # S
+        "SAIC", "SAM", "SBAC", "SBUX", "SCCO", "SCHW", "SE", "SEDG", "SFIX",
+        "SFM", "SHAK", "SHOP", "SHW", "SID", "SIRI", "SJM", "SKX", "SLB", "SLM",
+        "SMCI", "SNAP", "SNOW", "SNPS", "SO", "SONY", "SPCE", "SPG", "SPGI",
+        "SPOT", "SQ", "SQM", "SRE", "SRPT", "SSNC", "STAG", "STLA", "STLD",
+        "STNE", "STT", "STX", "STZ", "SU", "SUI", "SWK", "SWKS", "SYF", "SYK",
+        "SYNA", "SYY",
+        # T
+        "T", "TAK", "TAL", "TAP", "TD", "TDOC", "TDY", "TEAM", "TECH", "TEL",
+        "TENB", "TER", "TEVA", "TFX", "TGT", "THO", "TJX", "TME", "TMO", "TMUS",
+        "TOL", "TPR", "TREE", "TRIP", "TRMB", "TROW", "TRV", "TSCO", "TSLA",
+        "TSM", "TSN", "TT", "TTD", "TTE", "TTWO", "TWLO", "TXN", "TXRH", "TXT",
+        "TYL",
+        # U
+        "U", "UAA", "UAL", "UBER", "UDR", "ULTA", "UNH", "UNP", "UPS", "URBN",
+        "USB",
+        # V
+        "V", "VALE", "VEEV", "VFC", "VICI", "VIPS", "VLO", "VMC", "VNO", "VOD",
+        "VRSK", "VRSN", "VRTX", "VTRS", "VTR", "VZ",
+        # W
+        "W", "WAB", "WAT", "WBA", "WBD", "WBS", "WDAY", "WDC", "WEC", "WELL",
+        "WEN", "WERN", "WFC", "WHR", "WIX", "WKHS", "WLK", "WM", "WMB", "WMT",
+        "WPC", "WRK", "WST", "WU", "WY", "WYNN",
+        # X-Z
+        "X", "XEL", "XOM", "XPEV", "XRX", "XYL", "YETI", "YPF", "YUM", "YUMC",
+        "Z", "ZBH", "ZBRA", "ZI", "ZION", "ZM", "ZS", "ZTO", "ZTS",
+    }
+
+    # ── XTB — ~2,000+ US stock CFDs + real stocks (sourced from official equity-table.pdf)
+    # Updated March 2025. Includes all S&P 500, NASDAQ-100, and broad mid-cap coverage.
+    XTB_TICKERS = {
+        # A
+        "A", "AA", "AAL", "AAP", "AAPL", "ABBV", "ABG", "ABT", "ACGL", "ACHC",
+        "ACHR", "ACI", "ACM", "ACN", "ADBE", "ADI", "ADM", "ADP", "ADSK", "ADTN",
+        "AEE", "AEP", "AER", "AES", "AFG", "AFL", "AFRM", "AGCO", "AGNC", "AGO",
+        "AGR", "AI", "AIG", "AIN", "AIR", "AIT", "AIZ", "AJG", "AKAM", "AL",
+        "ALB", "ALC", "ALGM", "ALGN", "ALGT", "ALK", "ALKS", "ALL", "ALLE",
+        "ALLY", "ALNY", "AMAT", "AMBA", "AMC", "AMCR", "AMCX", "AMD", "AME",
+        "AMED", "AMG", "AMGN", "AMP", "AMR", "AMT", "AMZN", "AN", "ANET", "ANSS",
+        "AON", "AOS", "APA", "APD", "APH", "APLE", "APLS", "APO", "APPS", "APTV",
+        "ARCC", "ARE", "ARES", "ARGX", "ARI", "ARMK", "ARR", "ARWR", "ASAN",
+        "ASGN", "ASH", "ASML", "ATUS", "AU", "AUB", "AVGO", "AVB", "AVT", "AVY",
+        "AXON", "AXP", "AXS", "AZUL",
+        # B
+        "BA", "BABA", "BAC", "BAH", "BAK", "BALL", "BAM", "BAND", "BAP", "BAX",
+        "BBAR", "BBD", "BBY", "BC", "BDX", "BE", "BEAM", "BEN", "BEPC", "BG",
+        "BHC", "BHP", "BIDU", "BIIB", "BILI", "BIO", "BJ", "BK", "BKNG", "BKR",
+        "BL", "BLDR", "BLK", "BLL", "BMA", "BMBL", "BMO", "BMRN", "BMY", "BN",
+        "BNTX", "BOX", "BP", "BPOP", "BR", "BRBR", "BRK.B", "BRO", "BROS",
+        "BSAC", "BSX", "BTG", "BUD", "BVN", "BWA", "BX", "BYND", "BZ",
+        # C
+        "C", "CABO", "CACC", "CACI", "CADE", "CAG", "CAH", "CAKE", "CALM", "CAR",
+        "CARG", "CARR", "CARS", "CAT", "CB", "CBOE", "CBRE", "CBRL", "CC", "CCI",
+        "CCK", "CCL", "CCU", "CDNS", "CDW", "CE", "CEG", "CELH", "CF", "CFG",
+        "CG", "CGNX", "CHGG", "CHD", "CHDN", "CHEF", "CHKP", "CHRD", "CHRW",
+        "CHTR", "CHWY", "CI", "CIB", "CIEN", "CINF", "CL", "CLF", "CLH", "CLX",
+        "CM", "CMA", "CMC", "CMCSA", "CME", "CMG", "CMI", "CMS", "CNC", "CNK",
+        "CNO", "CNP", "COF", "COHR", "COHU", "COKE", "COLM", "COMM", "COO", "COP",
+        "COST", "COTY", "CPB", "CPRI", "CPRT", "CPT", "CRI", "CRK", "CRL", "CRM",
+        "CROX", "CRS", "CSCO", "CSIQ", "CSL", "CSX", "CTAS", "CTRA", "CTRE",
+        "CTSH", "CTVA", "CVE", "CVS", "CVX", "CW", "CWEN", "CZR",
+        # D
+        "D", "DAL", "DAR", "DASH", "DBX", "DD", "DDOG", "DE", "DECK", "DELL",
+        "DEO", "DFS", "DG", "DGX", "DHI", "DHR", "DIN", "DINO", "DIS", "DISH",
+        "DKS", "DLB", "DLR", "DLTR", "DOCS", "DOCU", "DOV", "DOW", "DPZ", "DRI",
+        "DT", "DTE", "DUK", "DVA", "DVN", "DXC", "DXCM",
+        # E
+        "EA", "EAT", "EBAY", "ECL", "ED", "EFX", "EIX", "EL", "ELAN", "ELV",
+        "EME", "EMN", "EMR", "ENB", "ENPH", "ENR", "ENS", "EOG", "EPAM", "EPC",
+        "EPR", "EQH", "EQIX", "EQR", "EQT", "ES", "ESS", "ESTC", "ETN", "ETR",
+        "ETSY", "EVH", "EW", "EWBC", "EXAS", "EXC", "EXEL", "EXLS", "EXP",
+        "EXPD", "EXPE", "EXPO",
+        # F
+        "F", "FAF", "FANG", "FAST", "FATE", "FBIN", "FCNCA", "FDS", "FDX", "FE",
+        "FERG", "FFIV", "FHN", "FICO", "FIS", "FISV", "FIX", "FIZZ", "FL", "FLO",
+        "FLS", "FLT", "FMC", "FMS", "FN", "FND", "FNF", "FOX", "FOXA", "FROG",
+        "FRPT", "FRT", "FSLY", "FSR", "FTI", "FTNT", "FTS", "FTV", "FUBO", "FUL",
+        "FUTU", "FVRR",
+        # G
+        "GD", "GDDY", "GDS", "GE", "GEL", "GEN", "GFL", "GHC", "GILD", "GIS",
+        "GL", "GLOB", "GLW", "GM", "GME", "GMED", "GMS", "GNRC", "GO", "GOGO",
+        "GOLD", "GOOG", "GOOGL", "GOOS", "GPC", "GPI", "GPN", "GRAB", "GRBK",
+        "GRFS", "GRMN", "GS", "GSK", "GTLS", "GTN", "GWW", "GXO",
+        # H
+        "H", "HAIN", "HALO", "HAS", "HBI", "HCA", "HD", "HDB", "HELE", "HES",
+        "HIG", "HIMX", "HL", "HLF", "HLT", "HMC", "HOG", "HOLX", "HON", "HOOD",
+        "HPE", "HPQ", "HRB", "HRL", "HSBC", "HSIC", "HST", "HSY", "HUM", "HUN",
+        "HUYA", "HWM",
+        # I
+        "IAC", "IART", "IBM", "IBN", "ICE", "ICLR", "IDCC", "IDXX", "IEX", "IFF",
+        "IGT", "IIPR", "ILMN", "IMAX", "IMGN", "INCY", "INFY", "INSP", "INTC",
+        "INTU", "INVH", "IONS", "IPAR", "IPG", "IQ", "IR", "IRBT", "IRM", "IRTC",
+        "ISRG", "IT", "ITW", "IVZ",
+        # J
+        "J", "JACK", "JBHT", "JBL", "JCI", "JD", "JEF", "JKS", "JLL", "JMIA",
+        "JNJ", "JNPR", "JOBY", "JPM", "JWN",
+        # K
+        "K", "KBR", "KDP", "KEP", "KEY", "KEYS", "KEX", "KGC", "KHC", "KIM",
+        "KKR", "KLAC", "KMB", "KMI", "KMX", "KNX", "KO", "KR", "KRYS", "KSS",
+        "KTOS", "KVUE",
+        # L
+        "L", "LAD", "LAMR", "LAZR", "LCID", "LDOS", "LEA", "LECO", "LEG", "LEN",
+        "LEVI", "LH", "LI", "LIN", "LKQ", "LLY", "LMND", "LMT", "LNC", "LNG",
+        "LNT", "LOGI", "LOMA", "LOPE", "LOW", "LRCX", "LRN", "LSCC", "LULU",
+        "LUV", "LVS", "LYB", "LYFT", "LYV",
+        # M
+        "M", "MA", "MAA", "MAN", "MANH", "MANU", "MAR", "MARA", "MAS", "MASI",
+        "MAT", "MATX", "MAXN", "MBT", "MCD", "MCHP", "MCK", "MCO", "MDB", "MDLZ",
+        "MDT", "MDU", "MELI", "MET", "META", "MFC", "MFG", "MGM", "MHK", "MKL",
+        "MLCO", "MLM", "MMC", "MMM", "MNST", "MO", "MOD", "MORN", "MOS", "MPC",
+        "MPWR", "MPW", "MRK", "MRNA", "MRO", "MRVL", "MS", "MSCI", "MSFT",
+        "MSGS", "MSI", "MSTR", "MT", "MTB", "MTCH", "MTD", "MTG", "MTH", "MTN",
+        "MU", "MUFG", "MUR",
+        # N
+        "NAVI", "NBIX", "NCLH", "NCNO", "NCR", "NDAQ", "NDSN", "NE", "NEE", "NEM",
+        "NET", "NFLX", "NFG", "NIO", "NKE", "NKLA", "NLY", "NMR", "NOC", "NOV",
+        "NOW", "NRG", "NSC", "NSIT", "NTAP", "NTCT", "NTES", "NTNX", "NTRS",
+        "NUE", "NVAX", "NVCR", "NVDA", "NVR", "NWL", "NWSA", "NXST", "NYT",
+        # O
+        "O", "OBDC", "OC", "OGN", "OHI", "OKE", "OKTA", "OLED", "OLN", "OLPX",
+        "OMC", "ON", "ONTO", "OPEN", "ORCL", "ORI", "ORLY", "OSK", "OTIS", "OUST",
+        "OVV", "OXY",
+        # P
+        "PAAS", "PACB", "PANW", "PATH", "PAYC", "PAYX", "PB", "PBF", "PBR",
+        "PCAR", "PCG", "PDD", "PEG", "PEGA", "PENN", "PEP", "PFE", "PFG", "PFGC",
+        "PG", "PGR", "PH", "PHM", "PINS", "PKG", "PKX", "PLD", "PLMR", "PLNT",
+        "PLTR", "PLUG", "PLUS", "PM", "PMT", "PNC", "PNFP", "POOL", "POR", "POST",
+        "PPC", "PPG", "PPL", "PRI", "PRU", "PSA", "PSX", "PTON", "PVH", "PWR",
+        "PYPL",
+        # Q
+        "QCOM", "QDEL", "QS", "QTWO",
+        # R
+        "R", "RACE", "RARE", "RBLX", "RCL", "RDDT", "RDY", "RE", "REG", "REGN",
+        "REVG", "RF", "RGEN", "RGLD", "RH", "RHI", "RICK", "RITM", "RIVN", "RJF",
+        "RL", "RMBS", "RMD", "RNG", "RNR", "ROK", "ROKU", "ROST", "RPM", "RS",
+        "RSG", "RTX", "RUN", "RVMD", "RY",
+        # S
+        "S", "SAIC", "SAM", "SBAC", "SBUX", "SCCO", "SCHW", "SE", "SEDG", "SFIX",
+        "SFM", "SHAK", "SHOP", "SHW", "SID", "SIGA", "SJM", "SKM", "SLB", "SLGN",
+        "SLM", "SMCI", "SMG", "SNAP", "SNOW", "SNPS", "SO", "SONO", "SONY",
+        "SPCE", "SPG", "SPGI", "SPOT", "SPR", "SQ", "SQM", "SRE", "SRPT", "SSB",
+        "SSNC", "ST", "STAG", "STLA", "STLD", "STNE", "STT", "STX", "STZ", "SUI",
+        "SWK", "SWKS", "SYF", "SYK", "SYNA", "SYY",
+        # T
+        "T", "TAK", "TAL", "TAP", "TD", "TDOC", "TDY", "TEAM", "TECH", "TEL",
+        "TENB", "TER", "TEVA", "TFX", "TGT", "THG", "THO", "THS", "TJX", "TME",
+        "TMO", "TMUS", "TOL", "TPR", "TREE", "TRIP", "TRMB", "TROW", "TRV",
+        "TSCO", "TSLA", "TSM", "TSN", "TSEM", "TT", "TTD", "TTE", "TTWO", "TWLO",
+        "TX", "TXN", "TXRH", "TXT", "TYL",
+        # U
+        "U", "UAA", "UAL", "UBER", "UDR", "UHS", "UL", "ULTA", "UNH", "UNP",
+        "UPS", "URBN", "USB",
+        # V
+        "V", "VAC", "VCEL", "VEEV", "VICI", "VICR", "VIPS", "VLO", "VMC", "VNO",
+        "VOD", "VRSK", "VRSN", "VRTX", "VTRS", "VTR", "VZ",
+        # W
+        "W", "WAB", "WAFD", "WAT", "WBA", "WBD", "WBS", "WCN", "WDAY", "WDC",
+        "WEC", "WELL", "WEN", "WERN", "WFC", "WFRD", "WGO", "WHR", "WIX", "WKHS",
+        "WLK", "WM", "WMB", "WMG", "WMT", "WPC", "WRB", "WRK", "WST", "WU",
+        "WY", "WYNN",
+        # X-Z
+        "X", "XEL", "XOM", "XPEL", "XPEV", "XRAY", "XRX", "XYL", "YETI", "YPF",
+        "YUM", "YUMC", "Z", "ZBRA", "ZBH", "ZI", "ZION", "ZM", "ZS", "ZTO", "ZTS",
+    }
+
     PRICE_TTL = 300  # seconds — re-fetch after 5 minutes
     _cache: dict = {}  # ticker -> {"data": {...}, "ts": float}
 
@@ -552,7 +914,6 @@ class StockAvailabilityChecker:
             try:
                 info = yf.Ticker(ticker).fast_info
                 exchange = getattr(info, 'exchange', '') or ''
-                available = exchange in StockAvailabilityChecker.US_EXCHANGES
                 last_price = getattr(info, 'last_price', None)
                 prev_close = getattr(info, 'previous_close', None)
                 if last_price and prev_close and prev_close != 0:
@@ -561,13 +922,19 @@ class StockAvailabilityChecker:
                     pct_change = None
                 result = {
                     "exchange": exchange,
-                    "revolut": available,
-                    "xtb": available,
+                    "revolut": ticker in StockAvailabilityChecker.REVOLUT_TICKERS,
+                    "xtb": ticker in StockAvailabilityChecker.XTB_TICKERS,
                     "price": round(last_price, 2) if last_price else None,
                     "change_pct": pct_change,
                 }
             except Exception:
-                result = {"exchange": "unknown", "revolut": False, "xtb": False, "price": None, "change_pct": None}
+                result = {
+                    "exchange": "unknown",
+                    "revolut": ticker in StockAvailabilityChecker.REVOLUT_TICKERS,
+                    "xtb": ticker in StockAvailabilityChecker.XTB_TICKERS,
+                    "price": None,
+                    "change_pct": None,
+                }
             return ticker, result
 
         results = {t: self._cache[t]["data"] for t in tickers if self._is_fresh(t)}
@@ -578,6 +945,318 @@ class StockAvailabilityChecker:
                 self._cache[ticker] = {"data": result, "ts": time.time()}
                 results[ticker] = result
         return results
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# LIVE MARKET STATE — Real-time VIX, SPY, pre-market detection, earnings season
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class LiveMarketState:
+    """
+    Fetches live market context via yfinance:
+      - VIX level and derived regime (calm / normal / volatile / crisis)
+      - SPY daily change %
+      - Pre-market / after-hours detection (ET timezone)
+      - Earnings season heuristic (heavy reporting months)
+    Refreshes on demand; callers should invoke update() periodically.
+    """
+
+    REFRESH_MARKET_HOURS = 60     # seconds — during trading hours (9:30–16:00 ET)
+    REFRESH_EXTENDED_HOURS = 120  # seconds — pre-market / after-hours (4:00–9:30, 16:00–20:00)
+    REFRESH_CLOSED = 600          # seconds — market closed (nights, weekends)
+
+    # Months with heaviest earnings reporting (Jan, Apr, Jul, Oct)
+    EARNINGS_MONTHS = {1, 4, 7, 10}
+
+    def __init__(self):
+        self.state: dict = {
+            "vix": 18.5,
+            "market_regime": "normal",
+            "spy_change_pct": 0.0,
+            "is_pre_market": False,
+            "is_earnings_season": False,
+            "market_open": False,
+        }
+        self._last_refresh: float = 0.0
+        self._initialized = False
+
+    def _get_refresh_interval(self) -> int:
+        """Return adaptive refresh interval based on market hours."""
+        try:
+            import zoneinfo
+            et = zoneinfo.ZoneInfo("America/New_York")
+        except Exception:
+            et = timezone(timedelta(hours=-5))
+        now_et = datetime.now(et)
+        # Weekends
+        if now_et.weekday() >= 5:
+            return self.REFRESH_CLOSED
+        t = now_et.hour * 60 + now_et.minute
+        if 570 <= t < 960:      # 9:30 AM – 4:00 PM ET
+            return self.REFRESH_MARKET_HOURS
+        elif 240 <= t < 570 or 960 <= t < 1200:  # 4:00–9:30 or 16:00–20:00
+            return self.REFRESH_EXTENDED_HOURS
+        return self.REFRESH_CLOSED
+
+    def _determine_regime(self, vix: float) -> str:
+        if vix < 15:
+            return "calm"
+        elif vix < 20:
+            return "normal"
+        elif vix < 30:
+            return "volatile"
+        else:
+            return "crisis"
+
+    def _detect_pre_market(self) -> bool:
+        """Check if current time is pre-market (4:00–9:30 ET) or after-hours (16:00–20:00 ET)."""
+        try:
+            import zoneinfo
+            et = zoneinfo.ZoneInfo("America/New_York")
+        except Exception:
+            # Fallback: approximate ET as UTC-5
+            et = timezone(timedelta(hours=-5))
+        now_et = datetime.now(et)
+        hour, minute = now_et.hour, now_et.minute
+        t = hour * 60 + minute
+        # Pre-market: 4:00 AM – 9:30 AM ET
+        return 240 <= t < 570
+
+    def _is_market_open(self) -> bool:
+        """Check if NYSE is currently in regular trading hours (9:30–16:00 ET, weekdays)."""
+        try:
+            import zoneinfo
+            et = zoneinfo.ZoneInfo("America/New_York")
+        except Exception:
+            et = timezone(timedelta(hours=-5))
+        now_et = datetime.now(et)
+        if now_et.weekday() >= 5:
+            return False
+        t = now_et.hour * 60 + now_et.minute
+        return 570 <= t < 960  # 9:30 AM – 4:00 PM
+
+    def _detect_earnings_season(self) -> bool:
+        """Earnings season = last 2 weeks of Jan/Apr/Jul/Oct + first 2 weeks of Feb/May/Aug/Nov."""
+        now = datetime.now(timezone.utc)
+        month, day = now.month, now.day
+        # Late month of earnings quarter
+        if month in self.EARNINGS_MONTHS and day >= 15:
+            return True
+        # Early month after earnings quarter
+        if month in {m + 1 for m in self.EARNINGS_MONTHS} and day <= 15:
+            return True
+        return False
+
+    async def update(self, force: bool = False) -> dict:
+        """Fetch live VIX + SPY data. Adaptive refresh based on market hours."""
+        now = time.time()
+        interval = self._get_refresh_interval()
+        if not force and (now - self._last_refresh) < interval:
+            # Update time-sensitive fields without API call
+            self.state["is_pre_market"] = self._detect_pre_market()
+            return self.state
+
+        import yfinance as yf
+
+        def _fetch_vix_spy():
+            vix_val, spy_pct = None, None
+            try:
+                vix_info = yf.Ticker("^VIX").fast_info
+                vix_val = getattr(vix_info, "last_price", None)
+            except Exception as e:
+                print(f"  [MarketState] VIX fetch failed: {e}")
+            try:
+                spy_info = yf.Ticker("SPY").fast_info
+                last = getattr(spy_info, "last_price", None)
+                prev = getattr(spy_info, "previous_close", None)
+                if last and prev and prev != 0:
+                    spy_pct = round((last - prev) / prev * 100, 2)
+            except Exception as e:
+                print(f"  [MarketState] SPY fetch failed: {e}")
+            return vix_val, spy_pct
+
+        try:
+            vix_val, spy_pct = await asyncio.to_thread(_fetch_vix_spy)
+
+            if vix_val is not None:
+                self.state["vix"] = round(vix_val, 2)
+                self.state["market_regime"] = self._determine_regime(vix_val)
+
+            if spy_pct is not None:
+                self.state["spy_change_pct"] = spy_pct
+
+            self.state["is_pre_market"] = self._detect_pre_market()
+            self.state["is_earnings_season"] = self._detect_earnings_season()
+            self.state["market_open"] = self._is_market_open()
+            self._last_refresh = now
+            self._initialized = True
+
+            regime = self.state["market_regime"].upper()
+            refresh_s = self._get_refresh_interval()
+            print(f"  [MarketState] LIVE — VIX: {self.state['vix']:.2f} ({regime})  "
+                  f"SPY: {self.state['spy_change_pct']:+.2f}%  "
+                  f"Pre-market: {self.state['is_pre_market']}  "
+                  f"Market open: {self.state['market_open']}  "
+                  f"Earnings season: {self.state['is_earnings_season']}  "
+                  f"Next refresh: {refresh_s}s")
+
+            # Push to all connected dashboard clients
+            await broadcast_market_state()
+
+        except Exception as e:
+            print(f"  [MarketState] Update failed, using last known values: {e}")
+
+        return self.state
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SIGNAL OUTCOME TRACKER — Measures whether BUY/SELL signals were correct
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class SignalOutcomeTracker:
+    """
+    Tracks BUY/SELL signal outcomes by checking prices at +1h, +4h, +1d, +1w.
+    - A BUY signal is a WIN if the price went up by the checkpoint.
+    - A SELL signal is a WIN if the price went down.
+    - Runs as a background task, checking pending signals every 5 minutes.
+    """
+
+    # Checkpoint offsets in seconds
+    CHECKPOINTS = {
+        "1h":  3600,
+        "4h":  14400,
+        "1d":  86400,
+        "1w":  604800,
+    }
+
+    def __init__(self, db: "EventDatabase"):
+        self.db = db
+        self._running = False
+
+    def record_signal(self, event_id: str, ticker: str, signal: str,
+                      confidence: int, entry_price: float):
+        """Called when a new BUY or SELL signal is generated."""
+        if signal not in ("BUY", "SELL") or not entry_price:
+            return
+        self.db.insert_signal(event_id, ticker, signal, confidence,
+                              entry_price, time.time())
+        print(f"  [Tracker] Recording {signal} signal for ${ticker} @ ${entry_price:.2f} ({confidence}%)")
+
+    async def check_pending(self):
+        """Check all pending signals and update any due checkpoints."""
+        import yfinance as yf
+
+        pending = self.db.get_pending_signals()
+        if not pending:
+            return
+
+        # Group by ticker to minimize API calls
+        tickers_needed = set()
+        now = time.time()
+        for sig in pending:
+            elapsed = now - sig["entry_time"]
+            for cp, offset in self.CHECKPOINTS.items():
+                price_field = f"price_{cp}"
+                if sig.get(price_field) is None and elapsed >= offset:
+                    tickers_needed.add(sig["ticker"])
+                    break
+
+        if not tickers_needed:
+            return
+
+        # Batch fetch current prices
+        prices = {}
+
+        def _fetch_prices():
+            for t in tickers_needed:
+                try:
+                    info = yf.Ticker(t).fast_info
+                    p = getattr(info, "last_price", None)
+                    if p:
+                        prices[t] = round(p, 2)
+                except Exception:
+                    pass
+
+        await asyncio.to_thread(_fetch_prices)
+
+        # Update checkpoints
+        updates = 0
+        for sig in pending:
+            ticker = sig["ticker"]
+            if ticker not in prices:
+                continue
+            current_price = prices[ticker]
+            entry_price = sig["entry_price"]
+            elapsed = now - sig["entry_time"]
+
+            for cp, offset in self.CHECKPOINTS.items():
+                price_field = f"price_{cp}"
+                if sig.get(price_field) is not None:
+                    continue  # Already filled
+                if elapsed < offset:
+                    continue  # Not due yet
+
+                pct = round((current_price - entry_price) / entry_price * 100, 2)
+
+                # WIN: BUY + price up, or SELL + price down
+                if sig["signal"] == "BUY":
+                    outcome = "WIN" if pct > 0 else "LOSS" if pct < 0 else "FLAT"
+                else:  # SELL
+                    outcome = "WIN" if pct < 0 else "LOSS" if pct > 0 else "FLAT"
+
+                self.db.update_signal_checkpoint(
+                    sig["event_id"], ticker, cp, current_price, pct, outcome
+                )
+                updates += 1
+                print(f"  [Tracker] {sig['signal']} ${ticker} @ +{cp}: "
+                      f"${entry_price:.2f} → ${current_price:.2f} ({pct:+.2f}%) = {outcome}")
+
+        if updates:
+            # Broadcast updated stats to dashboard
+            await self._broadcast_stats()
+
+    async def handle_track_request(self, msg: dict):
+        """Handle a user-initiated track request from the dashboard."""
+        import yfinance as yf
+
+        event_id = msg.get("event_id")
+        ticker = msg.get("ticker")
+        signal = msg.get("signal")  # BUY or SELL
+        confidence = msg.get("confidence", 0)
+
+        if not event_id or not ticker or signal not in ("BUY", "SELL"):
+            return
+
+        # Fetch current price as entry point
+        def _get_price():
+            try:
+                info = yf.Ticker(ticker).fast_info
+                return getattr(info, "last_price", None)
+            except Exception:
+                return None
+
+        price = await asyncio.to_thread(_get_price)
+        if not price:
+            print(f"  [Tracker] Could not fetch price for ${ticker}, skipping track")
+            return
+
+        self.record_signal(event_id, ticker, signal, confidence, round(price, 2))
+        await _broadcast_signal_performance()
+
+    async def _broadcast_stats(self):
+        """Send signal performance stats to all WS clients."""
+        await _broadcast_signal_performance()
+
+    async def run_loop(self):
+        """Background loop — checks pending signals every 5 minutes."""
+        self._running = True
+        print("  [Tracker] Signal outcome tracker started (checking every 5 min)")
+        while self._running:
+            try:
+                await self.check_pending()
+            except Exception as e:
+                print(f"  [Tracker] Error checking signals: {e}")
+            await asyncio.sleep(300)  # 5 minutes
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -615,6 +1294,42 @@ class EventDatabase:
                 stock_availability TEXT,
                 latency_ms         REAL
             )
+        """)
+        self.con.execute("""
+            CREATE TABLE IF NOT EXISTS signal_outcomes (
+                event_id           TEXT,
+                ticker             TEXT,
+                signal             TEXT,
+                confidence         INTEGER,
+                entry_price        REAL,
+                entry_time         REAL,
+                price_1h           REAL,
+                price_4h           REAL,
+                price_1d           REAL,
+                price_1w           REAL,
+                pct_1h             REAL,
+                pct_4h             REAL,
+                pct_1d             REAL,
+                pct_1w             REAL,
+                outcome_1h         TEXT,
+                outcome_4h         TEXT,
+                outcome_1d         TEXT,
+                outcome_1w         TEXT,
+                completed          INTEGER DEFAULT 0,
+                PRIMARY KEY (event_id, ticker)
+            )
+        """)
+        self.con.execute("""
+            CREATE INDEX IF NOT EXISTS idx_outcomes_completed
+            ON signal_outcomes(completed)
+        """)
+        self.con.execute("""
+            CREATE INDEX IF NOT EXISTS idx_events_timestamp
+            ON events(timestamp)
+        """)
+        self.con.execute("""
+            CREATE INDEX IF NOT EXISTS idx_events_impact_score
+            ON events(impact_score)
         """)
         self.con.commit()
 
@@ -655,6 +1370,168 @@ class EventDatabase:
 
     def count(self) -> int:
         return self.con.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+
+    def get_recent_events(self, limit: int = 100) -> list[dict]:
+        """Get recent events formatted for the frontend (same shape as WS broadcast)."""
+        cur = self.con.execute(
+            "SELECT event_id, timestamp, headline, source, source_tier, "
+            "event_type, direction, sentiment, impact_score, urgency, brief, "
+            "buy_signal, buy_confidence, affected_tickers, affected_sectors, "
+            "affected_etfs, stock_availability, latency_ms "
+            "FROM events ORDER BY timestamp DESC LIMIT ?",
+            (limit,)
+        )
+        results = []
+        for row in cur.fetchall():
+            tickers = json.loads(row[13]) if row[13] else []
+            sectors = json.loads(row[14]) if row[14] else []
+            etfs = json.loads(row[15]) if row[15] else []
+            avail = json.loads(row[16]) if row[16] else {}
+            # Build price_data from stock_availability
+            price_data = {}
+            for t, v in avail.items():
+                if isinstance(v, dict):
+                    price_data[t] = {"price": v.get("price"), "change_pct": v.get("change_pct")}
+            results.append({
+                "type": "event",
+                "id": row[0],
+                "ts": row[1] * 1000,
+                "headline": row[2],
+                "source": row[3],
+                "tier": row[4],
+                "type": row[5],
+                "direction": row[6],
+                "sentiment": row[7],
+                "score": row[8],
+                "tickers": tickers,
+                "sectors": sectors,
+                "etfs": etfs,
+                "latency": row[17],
+                "brief": row[10],
+                "buy_signal": row[11],
+                "buy_confidence": row[12],
+                "reasoning": [],
+                "risk": "",
+                "time_horizon": "",
+                "correlated_moves": [],
+                "url": "",
+                "stock_availability": avail,
+                "price_data": price_data,
+            })
+        return results
+
+    # ── Signal Outcome Tracking ──────────────────────────────────────────────
+
+    def insert_signal(self, event_id: str, ticker: str, signal: str,
+                      confidence: int, entry_price: float, entry_time: float):
+        """Record a new signal to track."""
+        try:
+            self.con.execute(
+                "INSERT OR IGNORE INTO signal_outcomes "
+                "(event_id, ticker, signal, confidence, entry_price, entry_time) "
+                "VALUES (?,?,?,?,?,?)",
+                (event_id, ticker, signal, confidence, entry_price, entry_time)
+            )
+            self.con.commit()
+        except Exception as e:
+            print(f"  [DB] Signal insert error: {e}")
+
+    def get_pending_signals(self) -> list[dict]:
+        """Get signals that still need price checkpoints."""
+        cur = self.con.execute(
+            "SELECT event_id, ticker, signal, confidence, entry_price, entry_time, "
+            "price_1h, price_4h, price_1d, price_1w "
+            "FROM signal_outcomes WHERE completed = 0"
+        )
+        cols = [d[0] for d in cur.description]
+        return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+    def update_signal_checkpoint(self, event_id: str, ticker: str,
+                                  checkpoint: str, price: float, pct: float, outcome: str):
+        """Update a specific time checkpoint (1h, 4h, 1d, 1w)."""
+        valid = {"1h", "4h", "1d", "1w"}
+        if checkpoint not in valid:
+            return
+        try:
+            self.con.execute(
+                f"UPDATE signal_outcomes SET price_{checkpoint}=?, pct_{checkpoint}=?, "
+                f"outcome_{checkpoint}=? WHERE event_id=? AND ticker=?",
+                (price, pct, outcome, event_id, ticker)
+            )
+            # Mark completed if this is the last checkpoint (1w)
+            if checkpoint == "1w":
+                self.con.execute(
+                    "UPDATE signal_outcomes SET completed=1 WHERE event_id=? AND ticker=?",
+                    (event_id, ticker)
+                )
+            self.con.commit()
+        except Exception as e:
+            print(f"  [DB] Signal checkpoint update error: {e}")
+
+    def get_signal_stats(self) -> dict:
+        """Compute aggregate win/loss stats across all tracked signals."""
+        stats = {"total": 0, "buy": {}, "sell": {}}
+        for signal_type in ("BUY", "SELL"):
+            for cp in ("1h", "4h", "1d", "1w"):
+                cur = self.con.execute(
+                    f"SELECT COUNT(*), "
+                    f"SUM(CASE WHEN outcome_{cp}='WIN' THEN 1 ELSE 0 END), "
+                    f"SUM(CASE WHEN outcome_{cp}='LOSS' THEN 1 ELSE 0 END), "
+                    f"AVG(pct_{cp}) "
+                    f"FROM signal_outcomes WHERE signal=? AND pct_{cp} IS NOT NULL",
+                    (signal_type,)
+                )
+                total, wins, losses, avg_pct = cur.fetchone()
+                stats[signal_type.lower()][cp] = {
+                    "total": total or 0,
+                    "wins": wins or 0,
+                    "losses": losses or 0,
+                    "win_rate": round((wins / total) * 100, 1) if total else 0,
+                    "avg_return": round(avg_pct, 2) if avg_pct else 0,
+                }
+        stats["total"] = self.con.execute(
+            "SELECT COUNT(*) FROM signal_outcomes"
+        ).fetchone()[0]
+        return stats
+
+    def get_recent_outcomes(self, limit: int = 20) -> list[dict]:
+        """Get most recent signal outcomes for display."""
+        cur = self.con.execute(
+            "SELECT s.event_id, s.ticker, s.signal, s.confidence, s.entry_price, "
+            "s.entry_time, s.pct_1h, s.pct_4h, s.pct_1d, s.pct_1w, "
+            "s.outcome_1h, s.outcome_4h, s.outcome_1d, s.outcome_1w, "
+            "e.headline "
+            "FROM signal_outcomes s LEFT JOIN events e ON s.event_id = e.event_id "
+            "ORDER BY s.entry_time DESC LIMIT ?",
+            (limit,)
+        )
+        cols = [d[0] for d in cur.description]
+        return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+    def get_tracked_ids(self) -> list[dict]:
+        """Get list of all currently tracked event_id + ticker pairs."""
+        cur = self.con.execute(
+            "SELECT event_id, ticker FROM signal_outcomes ORDER BY entry_time DESC"
+        )
+        return [{"event_id": r[0], "ticker": r[1]} for r in cur.fetchall()]
+
+    def remove_signal(self, event_id: str, ticker: str = None):
+        """Remove a tracked signal (untrack)."""
+        try:
+            if ticker:
+                self.con.execute(
+                    "DELETE FROM signal_outcomes WHERE event_id=? AND ticker=?",
+                    (event_id, ticker)
+                )
+            else:
+                self.con.execute(
+                    "DELETE FROM signal_outcomes WHERE event_id=?",
+                    (event_id,)
+                )
+            self.con.commit()
+            print(f"  [Tracker] Untracked signal {event_id} {ticker or '(all tickers)'}")
+        except Exception as e:
+            print(f"  [DB] Signal remove error: {e}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1250,14 +2127,9 @@ class NYSEReferenceDB:
             },
         }
 
-        # ── MARKET STATE (simulated; production: live VIX + market data) ───
-        self.market_state = {
-            "vix": 18.5,
-            "market_regime": "normal",  # calm, normal, volatile, crisis
-            "spy_change_pct": -0.3,
-            "is_pre_market": False,
-            "is_earnings_season": True,
-        }
+        # ── MARKET STATE (live via yfinance — VIX, SPY, pre-market, earnings) ──
+        self.live_market = LiveMarketState()
+        self.market_state = self.live_market.state  # shared reference — updates in-place
 
     def resolve_ticker(self, text: str) -> Optional[str]:
         """Resolve a company name or alias to its NYSE ticker."""
@@ -1326,11 +2198,59 @@ class EntityExtractor:
     Pass 5: Sector → ETF propagation
     """
 
+    # Aliases that are common English words — always require word-boundary matching
+    # regardless of length, to prevent false extraction from news text.
+    AMBIGUOUS_ALIASES = {
+        "ge", "arm", "lam", "ups", "citi", "chase", "visa", "coke", "now",
+        "oxy", "all", "it", "on", "an", "key", "car", "run", "well",
+        "lilly", "pioneer", "gold", "ford",
+    }
+
+    # Patterns to detect analyst/rater role and separate actor from target.
+    # Group "actor" captures the firm performing the action (analyst).
+    # These patterns match common headline structures for upgrades/downgrades.
+    ANALYST_ACTION_PATTERNS = [
+        # "VMC downgraded to Neutral by JPMorgan" / "VMC upgraded by Goldman Sachs"
+        re.compile(
+            r'(?:downgrade[sd]?|upgrade[sd]?|rated|cut|initiated?|reiterate[sd]?'
+            r'|maintained?|raises?\s+(?:price\s+)?target|lowers?\s+(?:price\s+)?target'
+            r'|overweight|underweight|outperform|underperform|neutral|sell\s+rating'
+            r'|buy\s+rating)\s+.*?\bby\s+(?P<actor>.+?)(?:\s*[,;.\-—]|\s+(?:as|amid|after|on|citing|due|with|the|saying|over|ahead|following|here))',
+            re.IGNORECASE,
+        ),
+        # "JPMorgan downgrades VMC" / "Goldman Sachs upgrades AAPL"
+        re.compile(
+            r'(?P<actor>.+?)\s+(?:downgrade[sd]?|upgrade[sd]?|initiate[sd]?'
+            r'|reiterate[sd]?|maintain[sd]?|cut[sd]?|rate[sd]?'
+            r'|raises?\s+(?:price\s+)?target|lowers?\s+(?:price\s+)?target'
+            r'|starts?\s+coverage|begins?\s+coverage)\s',
+            re.IGNORECASE,
+        ),
+    ]
+
     def __init__(self, reference_db: NYSEReferenceDB):
         self.db = reference_db
         self.ticker_pattern = re.compile(
-            r'(?:\$([A-Z]{1,5}))|(?:\((?:NYSE|NASDAQ)\s*:\s*([A-Z]{1,5})\))'
+            r'(?:\$([A-Z]{1,5}))'                             # $VMC
+            r'|(?:\((?:NYSE|NASDAQ)\s*:\s*([A-Z]{1,5})\))'    # (NYSE:VMC)
+            r'|(?:\(([A-Z]{1,5})\))'                          # (VMC) — parenthesized ticker
         )
+        # Combined set of all known tickers (detailed DB + broker lists)
+        self._all_known_tickers = (
+            set(self.db.tickers.keys())
+            | StockAvailabilityChecker.REVOLUT_TICKERS
+            | StockAvailabilityChecker.XTB_TICKERS
+        )
+        # Precompile word-boundary regex for short/ambiguous aliases
+        self._alias_patterns: dict[str, tuple[re.Pattern, str]] = {}
+        for alias, ticker in self.db.aliases.items():
+            if len(alias) <= 3 or alias in self.AMBIGUOUS_ALIASES:
+                self._alias_patterns[alias] = (
+                    re.compile(r'\b' + re.escape(alias) + r'\b'),
+                    ticker,
+                )
+            else:
+                self._alias_patterns[alias] = (None, ticker)  # plain substring
         # Sector keywords for macro events that don't mention specific companies
         self.sector_keywords: dict[str, list[str]] = {
             "Semiconductors": ["chip", "semiconductor", "wafer", "fab ", "foundry", "gpu", "ai chip",
@@ -1359,17 +2279,53 @@ class EntityExtractor:
         found_supply_chain = set()
         found_contagion = set()
 
-        # Pass 1: Explicit ticker symbols
+        # Pass 1: Explicit ticker symbols ($VMC, NYSE:VMC, or (VMC))
         for match in self.ticker_pattern.finditer(text):
-            ticker = match.group(1) or match.group(2)
-            if ticker in self.db.tickers:
+            ticker = match.group(1) or match.group(2) or match.group(3)
+            if ticker in self._all_known_tickers:
                 found_tickers.add(ticker)
 
-        # Pass 2: Company name / alias resolution
+        # Pass 2: Company name / alias resolution (word-boundary safe)
         text_lower = text.lower()
-        for alias, ticker in self.db.aliases.items():
-            if alias in text_lower:
-                found_tickers.add(ticker)
+        for alias, (pattern, ticker) in self._alias_patterns.items():
+            if pattern is not None:
+                # Short or ambiguous alias — require whole-word match
+                if pattern.search(text_lower):
+                    found_tickers.add(ticker)
+            else:
+                # Longer, unambiguous alias — substring is safe
+                if alias in text_lower:
+                    found_tickers.add(ticker)
+
+        # Pass 2b: Analyst role detection — remove actor (analyst firm) from
+        # affected_tickers so signals target the right stock.
+        # e.g. "VMC Downgraded by JPMorgan" → JPM is the analyst, not the target.
+        analyst_tickers = set()
+        if len(found_tickers) > 1:
+            headline_lower = headline.lower()
+            for pattern in self.ANALYST_ACTION_PATTERNS:
+                m = pattern.search(headline_lower)
+                if m:
+                    actor_text = m.group("actor").strip()
+                    # Resolve the actor text to a ticker via aliases
+                    for alias, (apatt, aticker) in self._alias_patterns.items():
+                        if aticker not in found_tickers:
+                            continue
+                        if apatt is not None:
+                            if apatt.search(actor_text):
+                                analyst_tickers.add(aticker)
+                        else:
+                            if alias in actor_text:
+                                analyst_tickers.add(aticker)
+                    # Also check explicit ticker symbols in the actor text
+                    for tmatch in self.ticker_pattern.finditer(actor_text):
+                        t = tmatch.group(1) or tmatch.group(2) or tmatch.group(3)
+                        if t in found_tickers:
+                            analyst_tickers.add(t)
+                    break  # first matching pattern is enough
+            # Only remove analyst tickers if at least one target remains
+            if analyst_tickers and (found_tickers - analyst_tickers):
+                found_tickers -= analyst_tickers
 
         # Pass 3: Sector keyword detection (for macro / broad events)
         detected_sectors_from_keywords = set()
@@ -2150,6 +3106,7 @@ class NYSEImpactScreener:
         self.claude_scorer = ClaudeScorer()
         self.availability_checker = StockAvailabilityChecker()
         self.db = EventDatabase()
+        self.signal_tracker = SignalOutcomeTracker(self.db)
         self.rss = None
         self.alert_threshold = alert_threshold
         self.processed_count = 0
@@ -2200,8 +3157,21 @@ class NYSEImpactScreener:
                     print(f"  [Claude] Validating BUY signal with {len(corroborating[:3])} corroborating source(s)...")
                     scored = await self.claude_scorer.validate_buy(scored, corroborating[:3])
 
+            # Check availability + price for correlated_moves and ticker_signals tickers
+            # that weren't already checked in the pre-Claude pass
+            extra_tickers = set()
+            extra_tickers.update(scored.correlated_moves)
+            extra_tickers.update(scored.ticker_signals.keys())
+            extra_tickers -= set(scored.stock_availability.keys())  # skip already checked
+            if extra_tickers:
+                extra_avail = await self.availability_checker.check_tickers(list(extra_tickers))
+                scored.stock_availability.update(extra_avail)
+                for t, v in extra_avail.items():
+                    scored.price_data[t] = {"price": v.get("price"), "change_pct": v.get("change_pct")}
+
         self.processed_count += 1
         self.db.insert(scored)
+
         for sector in scored.affected_sectors:
             self.sector_heat[sector].append(scored.impact_score)
         if scored.impact_score >= self.alert_threshold:
@@ -2245,8 +3215,10 @@ class NYSEImpactScreener:
         print(f"  {c['WHITE']}║      NYSE IMPACT NEWS SCREENER v2.0 — Engine Online             ║{c['RESET']}")
         print(f"  {c['WHITE']}║      Sectors: 16  │  Tickers: {len(self.reference_db.tickers):3d}  │  "
               f"Aliases: {len(self.reference_db.aliases):3d}          ║{c['RESET']}")
+        vix = self.reference_db.market_state['vix']
+        regime = self.reference_db.market_state['market_regime'].upper()
         print(f"  {c['WHITE']}║      Alert Threshold: {self.alert_threshold}/100  │  "
-              f"VIX: {self.reference_db.market_state['vix']:.1f}  │  Feed: {len(feed)} events   ║{c['RESET']}")
+              f"VIX: {vix:.1f} ({regime})  │  Feed: {len(feed)} events   ║{c['RESET']}")
         print(f"  {c['WHITE']}╚══════════════════════════════════════════════════════════════════╝{c['RESET']}")
         print()
 
@@ -2299,14 +3271,32 @@ class NYSEImpactScreener:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 async def main():
+    global _LIVE_MARKET_STATE, _SIGNAL_TRACKER_DB, _SIGNAL_TRACKER
+
     screener = NYSEImpactScreener(alert_threshold=0)
     rss = RSSFeed()
     screener.rss = rss
     await start_http_server(screener.db)
+
+    # Wire up global references so WS handler can send state on connect
+    _LIVE_MARKET_STATE = screener.reference_db.live_market
+    _SIGNAL_TRACKER_DB = screener.db
+    _SIGNAL_TRACKER = screener.signal_tracker
+
+    # Initial live market state fetch (VIX, SPY, pre-market, earnings season)
+    print("  [MarketState] Fetching initial live market data...")
+    await screener.reference_db.live_market.update(force=True)
+
+    # Start signal outcome tracker as a background task
+    asyncio.create_task(screener.signal_tracker.run_loop())
+
     async with websockets.serve(ws_handler, "0.0.0.0", 8765):
         print("  WebSocket server listening on ws://localhost:8765")
         print("  Polling RSS feeds every 60 seconds. Press Ctrl+C to stop.\n")
         while True:
+            # Refresh market state each cycle (auto-skips if within cooldown)
+            await screener.reference_db.live_market.update()
+
             items = await rss.fetch()
             if items:
                 print(f"  [RSS] {len(items)} new articles fetched")

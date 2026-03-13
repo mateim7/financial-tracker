@@ -19,6 +19,13 @@ function getTimeAgo(ts) {
 
 const sevColor = { critical: "#eb4d3d", high: "#f5a623", medium: "#34c759", low: "#c7c7cc" };
 
+const regimeConfig = {
+  calm:     { label: "CALM",     color: "#1a9d4a", bg: "#e8f9ef" },
+  normal:   { label: "NORMAL",   color: "#0066ff", bg: "#eef4ff" },
+  volatile: { label: "VOLATILE", color: "#f5a623", bg: "#fff3e0" },
+  crisis:   { label: "CRISIS",   color: "#eb4d3d", bg: "#fdeaea" },
+};
+
 /* ── small components ────────────────────────────────────────────────────── */
 function ScoreRing({ score }) {
   const severity = getSeverity(score);
@@ -109,7 +116,7 @@ function SignalBadge({ signal, confidence }) {
 }
 
 /* ── event card ──────────────────────────────────────────────────────────── */
-function EventCard({ event, isNew }) {
+function EventCard({ event, isNew, trackedPairs, onTrack, onUntrack }) {
   const severity = getSeverity(event.score);
   const [timeAgo, setTimeAgo] = useState(getTimeAgo(event.ts));
   const [hovered, setHovered] = useState(false);
@@ -218,45 +225,149 @@ function EventCard({ event, isNew }) {
         </div>
       )}
 
-      {/* correlated moves */}
+      {/* correlated moves with per-ticker signals */}
       {event.correlated_moves && event.correlated_moves.length > 0 && (
         <div style={{ display: "flex", gap: 6, marginBottom: 12, alignItems: "center", flexWrap: "wrap" }}>
           <span style={{ fontSize: 11, color: "#aeaeb2", fontWeight: 600 }}>Also moves</span>
-          {event.correlated_moves.map(t => (
-            <span key={t} style={{ fontSize: 11, padding: "3px 8px", borderRadius: 8,
-              background: "#f0f0f5", color: "#636366", fontWeight: 600 }}>
-              {t}
-            </span>
-          ))}
-        </div>
-      )}
-
-      {/* signal badge */}
-      {event.buy_signal && (
-        <div style={{ marginBottom: 14 }}>
-          <SignalBadge signal={event.buy_signal} confidence={event.buy_confidence} />
-        </div>
-      )}
-
-      {/* availability badges */}
-      {event.stock_availability && event.tickers && event.tickers.length > 0 && (
-        <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
-          {event.tickers.map(t => {
-            const info = event.stock_availability[t];
-            if (!info) return null;
-            const platforms = [info.revolut && "Revolut", info.xtb && "XTB"].filter(Boolean);
+          {event.correlated_moves.map(t => {
+            const ts = event.ticker_signals && event.ticker_signals[t];
+            const sigColor = ts ? (ts.signal === "BUY" ? "#1a9d4a" : ts.signal === "SELL" ? "#e53935" : "#636366") : "#636366";
+            const sigBg = ts ? (ts.signal === "BUY" ? "#e8f5e9" : ts.signal === "SELL" ? "#ffebee" : "#f0f0f5") : "#f0f0f5";
             return (
-              <span key={t} style={{
-                fontSize: 11, padding: "3px 10px", borderRadius: 8, fontWeight: 500,
-                background: platforms.length ? "#e8f9ef" : "#fdeaea",
-                color: platforms.length ? "#1a9d4a" : "#d63031",
-              }}>
-                {t}: {platforms.length ? platforms.join(" · ") : "unavailable"}
+              <span key={t} style={{ fontSize: 11, padding: "3px 8px", borderRadius: 8,
+                background: sigBg, color: sigColor, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 4 }}>
+                {t}
+                {ts && <span style={{ fontSize: 9, opacity: 0.8 }}>{ts.signal === "BUY" ? "▲" : ts.signal === "SELL" ? "▼" : "—"}</span>}
               </span>
             );
           })}
         </div>
       )}
+
+      {/* per-ticker signal badges + track buttons */}
+      {event.buy_signal && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
+          {event.ticker_signals && Object.keys(event.ticker_signals).length > 0 ? (
+            /* Per-ticker signals available — show each ticker with its own signal */
+            (() => {
+              const allTickers = [...(event.tickers || [])];
+              (event.correlated_moves || []).forEach(t => { if (!allTickers.includes(t)) allTickers.push(t); });
+              const groups = { BUY: [], SELL: [], HOLD: [] };
+              allTickers.forEach(ticker => {
+                const ts = event.ticker_signals[ticker];
+                if (ts) groups[ts.signal].push({ ticker, ...ts });
+              });
+              /* Also include tickers not in ticker_signals, using the blanket signal */
+              allTickers.forEach(ticker => {
+                if (!event.ticker_signals[ticker] && event.tickers && event.tickers.includes(ticker)) {
+                  groups[event.buy_signal].push({ ticker, signal: event.buy_signal, confidence: event.buy_confidence });
+                }
+              });
+              return ["BUY", "SELL", "HOLD"].filter(s => groups[s].length > 0).map(sig => (
+                <div key={sig} style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <SignalBadge signal={sig} confidence={Math.round(groups[sig].reduce((a, x) => a + x.confidence, 0) / groups[sig].length)} />
+                  {groups[sig].map(({ ticker, signal, confidence }) => {
+                    const isTracked = trackedPairs && trackedPairs.some(
+                      tp => tp.event_id === event.id && tp.ticker === ticker
+                    );
+                    const isInTickers = event.tickers && event.tickers.includes(ticker);
+                    const isInCorrelated = event.correlated_moves && event.correlated_moves.includes(ticker);
+                    const isTradeable = isInTickers || isInCorrelated;
+                    return (signal === "BUY" || signal === "SELL") && isTradeable ? (
+                      isTracked ? (
+                        <button key={ticker} onClick={() => onUntrack(event.id, ticker)} style={{
+                          padding: "5px 12px", borderRadius: 10, border: "1px solid #e5e5ea",
+                          background: "#f9f9fb", color: "#8e8e93", fontSize: 11, fontWeight: 600,
+                          cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4,
+                          transition: "all 0.15s ease",
+                        }}>
+                          <span style={{ color: "#1a9d4a" }}>&#10003;</span> Tracking ${ticker}
+                        </button>
+                      ) : (
+                        <button key={ticker} onClick={() => onTrack(event.id, ticker, signal, confidence)} style={{
+                          padding: "5px 12px", borderRadius: 10,
+                          border: `1px solid ${signal === "BUY" ? "#1a9d4a" : "#e53935"}`,
+                          background: signal === "BUY" ? "#e8f5e9" : "#ffebee",
+                          color: signal === "BUY" ? "#1a9d4a" : "#e53935",
+                          fontSize: 11, fontWeight: 600,
+                          cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4,
+                          transition: "all 0.15s ease",
+                        }}>
+                          {signal} ${ticker} <span style={{ opacity: 0.7 }}>{confidence}%</span>
+                        </button>
+                      )
+                    ) : (
+                      <span key={ticker} style={{ fontSize: 11, padding: "3px 10px", borderRadius: 8,
+                        background: "#f0f0f5", color: "#636366", fontWeight: 600 }}>
+                        ${ticker} <span style={{ opacity: 0.7 }}>{confidence}%</span>
+                      </span>
+                    );
+                  })}
+                </div>
+              ));
+            })()
+          ) : (
+            /* Fallback: single blanket signal (legacy behavior) */
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <SignalBadge signal={event.buy_signal} confidence={event.buy_confidence} />
+              {(event.buy_signal === "BUY" || event.buy_signal === "SELL") && event.tickers && event.tickers.length > 0 && (
+                event.tickers.map(ticker => {
+                  const isTracked = trackedPairs && trackedPairs.some(
+                    tp => tp.event_id === event.id && tp.ticker === ticker
+                  );
+                  return isTracked ? (
+                    <button key={ticker} onClick={() => onUntrack(event.id, ticker)} style={{
+                      padding: "5px 12px", borderRadius: 10, border: "1px solid #e5e5ea",
+                      background: "#f9f9fb", color: "#8e8e93", fontSize: 11, fontWeight: 600,
+                      cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4,
+                      transition: "all 0.15s ease",
+                    }}>
+                      <span style={{ color: "#1a9d4a" }}>&#10003;</span> Tracking ${ticker}
+                    </button>
+                  ) : (
+                    <button key={ticker} onClick={() => onTrack(event.id, ticker, event.buy_signal, event.buy_confidence)} style={{
+                      padding: "5px 12px", borderRadius: 10, border: "1px solid #0066ff",
+                      background: "#eef4ff", color: "#0066ff", fontSize: 11, fontWeight: 600,
+                      cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4,
+                      transition: "all 0.15s ease",
+                    }}>
+                      Track ${ticker}
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* availability badges — all trackable tickers (affected + correlated) */}
+      {event.stock_availability && (() => {
+        const allTrackable = [...(event.tickers || [])];
+        (event.correlated_moves || []).forEach(t => { if (!allTrackable.includes(t)) allTrackable.push(t); });
+        Object.keys(event.ticker_signals || {}).forEach(t => { if (!allTrackable.includes(t)) allTrackable.push(t); });
+        const withAvail = allTrackable.filter(t => event.stock_availability[t]);
+        if (withAvail.length === 0) return null;
+        return (
+          <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
+            {withAvail.flatMap(t => {
+              const info = event.stock_availability[t];
+              const brokers = [
+                { name: "Revolut", ok: info.revolut, color: "#7B61FF", bg: "#f0ecff" },
+                { name: "XTB", ok: info.xtb, color: "#1ea83c", bg: "#e8f9ef" },
+              ];
+              return brokers.filter(b => b.ok).map(b => (
+                <span key={`${t}-${b.name}`} style={{
+                  fontSize: 11, padding: "3px 10px", borderRadius: 8, fontWeight: 600,
+                  background: b.bg, color: b.color, border: `1px solid ${b.color}22`,
+                }}>
+                  ✓ {t} on {b.name}
+                </span>
+              ));
+            })}
+          </div>
+        );
+      })()}
 
       {/* tickers + prices + etfs row */}
       <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
@@ -265,6 +376,12 @@ function EventCard({ event, isNew }) {
           return <TickerPill key={t} ticker={t} priceData={pd} />;
         }) : (
           <span style={{ fontSize: 12, color: "#aeaeb2", fontStyle: "italic" }}>Macro — broad market</span>
+        )}
+        {event.correlated_moves && event.correlated_moves.length > 0 && event.tickers.length === 0 && (
+          event.correlated_moves.filter(t => event.price_data && event.price_data[t]).map(t => {
+            const pd = event.price_data[t];
+            return <TickerPill key={t} ticker={t} priceData={pd} />;
+          })
         )}
         {event.etfs && event.etfs.length > 0 && (
           <span style={{ fontSize: 11, color: "#aeaeb2", marginLeft: 4, fontWeight: 500 }}>
@@ -324,6 +441,228 @@ function SectorHeatmap({ events }) {
           );
         })}
       </div>
+    </div>
+  );
+}
+
+/* ── market state bar (VIX, regime, SPY, market status) ──────────────────── */
+function MarketStateBar({ marketState }) {
+  if (!marketState) return null;
+  const regime = regimeConfig[marketState.market_regime] || regimeConfig.normal;
+  const spyUp = marketState.spy_change_pct >= 0;
+  const vix = marketState.vix;
+
+  // VIX gauge: map 10–50 range to 0–100%
+  const vixPct = Math.min(100, Math.max(0, ((vix - 10) / 40) * 100));
+
+  return (
+    <div style={{ background: "#ffffff", borderRadius: 14, padding: "14px 20px", marginBottom: 10,
+      boxShadow: "0 1px 4px rgba(0,0,0,0.04)", display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
+
+      {/* VIX level + mini gauge */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div>
+          <div style={{ fontSize: 10, color: "#aeaeb2", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>VIX</div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: regime.color, fontFamily: "'JetBrains Mono', monospace", lineHeight: 1 }}>
+            {vix.toFixed(1)}
+          </div>
+        </div>
+        {/* mini bar gauge */}
+        <div style={{ width: 60, height: 6, borderRadius: 3, background: "#f0f0f5", overflow: "hidden" }}>
+          <div style={{ width: `${vixPct}%`, height: "100%", borderRadius: 3,
+            background: vix < 15 ? "#1a9d4a" : vix < 20 ? "#0066ff" : vix < 30 ? "#f5a623" : "#eb4d3d",
+            transition: "width 0.8s ease" }} />
+        </div>
+      </div>
+
+      {/* Regime badge */}
+      <span style={{ padding: "5px 14px", borderRadius: 20, background: regime.bg, color: regime.color,
+        fontSize: 11, fontWeight: 700, letterSpacing: "0.06em" }}>
+        {regime.label}
+      </span>
+
+      {/* Divider */}
+      <div style={{ width: 1, height: 28, background: "#e5e5ea" }} />
+
+      {/* SPY change */}
+      <div>
+        <div style={{ fontSize: 10, color: "#aeaeb2", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>SPY</div>
+        <div style={{ fontSize: 16, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace",
+          color: spyUp ? "#1a9d4a" : "#d63031" }}>
+          {spyUp ? "+" : ""}{marketState.spy_change_pct.toFixed(2)}%
+        </div>
+      </div>
+
+      {/* Divider */}
+      <div style={{ width: 1, height: 28, background: "#e5e5ea" }} />
+
+      {/* Market status */}
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <span style={{ width: 7, height: 7, borderRadius: "50%",
+          background: marketState.market_open ? "#1a9d4a" : marketState.is_pre_market ? "#f5a623" : "#aeaeb2",
+          animation: marketState.market_open ? "pulse 1.5s ease-in-out infinite" : "none" }} />
+        <span style={{ fontSize: 12, fontWeight: 600,
+          color: marketState.market_open ? "#1a9d4a" : marketState.is_pre_market ? "#f5a623" : "#8e8e93" }}>
+          {marketState.market_open ? "Market Open" : marketState.is_pre_market ? "Pre-Market" : "Market Closed"}
+        </span>
+      </div>
+
+      {/* Earnings season indicator */}
+      {marketState.is_earnings_season && (
+        <>
+          <div style={{ width: 1, height: 28, background: "#e5e5ea" }} />
+          <span style={{ padding: "4px 12px", borderRadius: 8, background: "#fff3e0",
+            color: "#f5a623", fontSize: 11, fontWeight: 600 }}>
+            Earnings Season
+          </span>
+        </>
+      )}
+    </div>
+  );
+}
+
+/* ── signal performance panel ────────────────────────────────────────────── */
+function SignalPerformance({ signalData }) {
+  if (!signalData || !signalData.stats) return null;
+  const { stats, recent } = signalData;
+
+  const checkpoints = ["1h", "4h", "1d", "1w"];
+  const cpLabels = { "1h": "1 Hour", "4h": "4 Hours", "1d": "1 Day", "1w": "1 Week" };
+
+  const hasData = stats.total > 0;
+
+  return (
+    <div style={{ background: "#ffffff", borderRadius: 14, padding: "18px 20px", marginBottom: 10,
+      boxShadow: "0 1px 4px rgba(0,0,0,0.04)" }}>
+
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: "#1c1c1e" }}>Signal Performance</span>
+          <span style={{ fontSize: 11, color: "#aeaeb2" }}>{stats.total} signals tracked</span>
+        </div>
+      </div>
+
+      {!hasData ? (
+        <div style={{ textAlign: "center", padding: "16px 0", color: "#aeaeb2", fontSize: 13 }}>
+          No signals tracked yet — BUY/SELL signals will be verified at +1h, +4h, +1d, +1w
+        </div>
+      ) : (
+        <>
+          {/* Win rate grid — BUY signals */}
+          {stats.buy && Object.values(stats.buy).some(v => v.total > 0) && (
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: "#1a9d4a", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                BUY Signals
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 6 }}>
+                {checkpoints.map(cp => {
+                  const d = stats.buy[cp] || {};
+                  if (!d.total) return (
+                    <div key={cp} style={{ padding: "10px 8px", borderRadius: 10, background: "#f9f9fb", textAlign: "center" }}>
+                      <div style={{ fontSize: 10, color: "#aeaeb2", fontWeight: 600 }}>{cpLabels[cp]}</div>
+                      <div style={{ fontSize: 16, fontWeight: 700, color: "#c7c7cc", fontFamily: "'JetBrains Mono', monospace" }}>—</div>
+                    </div>
+                  );
+                  const winColor = d.win_rate >= 60 ? "#1a9d4a" : d.win_rate >= 45 ? "#f5a623" : "#d63031";
+                  return (
+                    <div key={cp} style={{ padding: "10px 8px", borderRadius: 10, background: "#f9f9fb", textAlign: "center" }}>
+                      <div style={{ fontSize: 10, color: "#aeaeb2", fontWeight: 600 }}>{cpLabels[cp]}</div>
+                      <div style={{ fontSize: 18, fontWeight: 800, color: winColor, fontFamily: "'JetBrains Mono', monospace" }}>
+                        {d.win_rate}%
+                      </div>
+                      <div style={{ fontSize: 10, color: "#8e8e93", marginTop: 2 }}>
+                        {d.wins}W / {d.losses}L
+                      </div>
+                      <div style={{ fontSize: 10, color: d.avg_return >= 0 ? "#1a9d4a" : "#d63031", fontFamily: "'JetBrains Mono', monospace" }}>
+                        avg {d.avg_return >= 0 ? "+" : ""}{d.avg_return}%
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Win rate grid — SELL signals */}
+          {stats.sell && Object.values(stats.sell).some(v => v.total > 0) && (
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: "#d63031", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                SELL Signals
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 6 }}>
+                {checkpoints.map(cp => {
+                  const d = stats.sell[cp] || {};
+                  if (!d.total) return (
+                    <div key={cp} style={{ padding: "10px 8px", borderRadius: 10, background: "#f9f9fb", textAlign: "center" }}>
+                      <div style={{ fontSize: 10, color: "#aeaeb2", fontWeight: 600 }}>{cpLabels[cp]}</div>
+                      <div style={{ fontSize: 16, fontWeight: 700, color: "#c7c7cc", fontFamily: "'JetBrains Mono', monospace" }}>—</div>
+                    </div>
+                  );
+                  const winColor = d.win_rate >= 60 ? "#1a9d4a" : d.win_rate >= 45 ? "#f5a623" : "#d63031";
+                  return (
+                    <div key={cp} style={{ padding: "10px 8px", borderRadius: 10, background: "#f9f9fb", textAlign: "center" }}>
+                      <div style={{ fontSize: 10, color: "#aeaeb2", fontWeight: 600 }}>{cpLabels[cp]}</div>
+                      <div style={{ fontSize: 18, fontWeight: 800, color: winColor, fontFamily: "'JetBrains Mono', monospace" }}>
+                        {d.win_rate}%
+                      </div>
+                      <div style={{ fontSize: 10, color: "#8e8e93", marginTop: 2 }}>
+                        {d.wins}W / {d.losses}L
+                      </div>
+                      <div style={{ fontSize: 10, color: d.avg_return >= 0 ? "#1a9d4a" : "#d63031", fontFamily: "'JetBrains Mono', monospace" }}>
+                        avg {d.avg_return >= 0 ? "+" : ""}{d.avg_return}%
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Recent outcomes list */}
+          {recent && recent.length > 0 && (
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 600, color: "#8e8e93", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                Recent Signals
+              </div>
+              <div style={{ maxHeight: 200, overflowY: "auto" }}>
+                {recent.slice(0, 10).map((s, i) => {
+                  const latestCp = ["1w", "1d", "4h", "1h"].find(cp => s[`pct_${cp}`] != null);
+                  const latestPct = latestCp ? s[`pct_${latestCp}`] : null;
+                  const latestOutcome = latestCp ? s[`outcome_${latestCp}`] : null;
+                  return (
+                    <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0",
+                      borderBottom: i < recent.length - 1 ? "1px solid #f5f5f7" : "none" }}>
+                      <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 6,
+                        background: s.signal === "BUY" ? "#e8f9ef" : "#fdeaea",
+                        color: s.signal === "BUY" ? "#1a9d4a" : "#d63031" }}>
+                        {s.signal}
+                      </span>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: "#0066ff" }}>${s.ticker}</span>
+                      <span style={{ fontSize: 11, color: "#aeaeb2", fontFamily: "'JetBrains Mono', monospace" }}>
+                        @{s.entry_price?.toFixed(2)}
+                      </span>
+                      <span style={{ fontSize: 11, color: "#8e8e93", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {s.headline}
+                      </span>
+                      {latestPct != null && (
+                        <span style={{ fontSize: 12, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace",
+                          color: latestOutcome === "WIN" ? "#1a9d4a" : latestOutcome === "LOSS" ? "#d63031" : "#8e8e93" }}>
+                          {latestPct >= 0 ? "+" : ""}{latestPct}%
+                          <span style={{ fontSize: 9, marginLeft: 3, opacity: 0.6 }}>@{latestCp}</span>
+                        </span>
+                      )}
+                      {latestPct == null && (
+                        <span style={{ fontSize: 11, color: "#c7c7cc", fontStyle: "italic" }}>pending</span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }
@@ -422,23 +761,63 @@ export default function NYSEImpactScreener() {
   const [threshold, setThreshold] = useState(0);
   const [isLive, setIsLive] = useState(true);
   const [wsStatus, setWsStatus] = useState("connecting");
+  const [marketState, setMarketState] = useState(null);
+  const [signalData, setSignalData] = useState(null);
   const feedRef = useRef(null);
   const wsRef = useRef(null);
   const reconnectTimerRef = useRef(null);
 
+  // Load historical events + signal data from DB on mount
+  useEffect(() => {
+    fetch("http://localhost:8766/api/events?limit=100")
+      .then(r => r.json())
+      .then(data => {
+        if (Array.isArray(data) && data.length > 0) {
+          setEvents(data);
+          console.log(`[Init] Loaded ${data.length} historical events from DB`);
+        }
+      })
+      .catch(() => {});
+    fetch("http://localhost:8766/api/signals")
+      .then(r => r.json())
+      .then(data => {
+        if (data && data.stats) {
+          setSignalData(data);
+          console.log(`[Init] Loaded signal performance (${data.stats.total} tracked)`);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  // WebSocket for real-time updates
   useEffect(() => {
     let retryDelay = 1000;
+    const existingIds = new Set();
     function connect() {
       const ws = new WebSocket("ws://localhost:8765");
       wsRef.current = ws;
       ws.onopen = () => { setWsStatus("live"); retryDelay = 1000; };
       ws.onmessage = (e) => {
-        if (!isLive) return;
         try {
-          const event = JSON.parse(e.data);
-          setEvents(prev => [event, ...prev]);
-          setNewIds(prev => new Set([...prev, event.id]));
-          setTimeout(() => setNewIds(prev => { const n = new Set(prev); n.delete(event.id); return n; }), 3000);
+          const msg = JSON.parse(e.data);
+          if (msg.type === "market_state") {
+            setMarketState(msg);
+            return;
+          }
+          if (msg.type === "signal_performance") {
+            setSignalData(msg);
+            return;
+          }
+          if (!isLive) return;
+          // Deduplicate — don't add events already loaded from history
+          if (msg.id && existingIds.has(msg.id)) return;
+          existingIds.add(msg.id);
+          setEvents(prev => {
+            if (prev.some(e => e.id === msg.id)) return prev;
+            return [msg, ...prev];
+          });
+          setNewIds(prev => new Set([...prev, msg.id]));
+          setTimeout(() => setNewIds(prev => { const n = new Set(prev); n.delete(msg.id); return n; }), 3000);
         } catch (err) { console.warn("WS parse error", err); }
       };
       ws.onclose = () => {
@@ -464,6 +843,30 @@ export default function NYSEImpactScreener() {
     if (filter === "buy") return e.buy_signal === "BUY";
     return true;
   });
+
+  const trackedPairs = signalData?.tracked_ids || [];
+
+  const handleTrack = (eventId, ticker, signal, confidence) => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({
+        action: "track_signal",
+        event_id: eventId,
+        ticker,
+        signal,
+        confidence,
+      }));
+    }
+  };
+
+  const handleUntrack = (eventId, ticker) => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({
+        action: "untrack_signal",
+        event_id: eventId,
+        ticker,
+      }));
+    }
+  };
 
   return (
     <div style={{ minHeight: "100vh", background: "#f2f2f7", paddingBottom: 60 }}>
@@ -517,8 +920,10 @@ export default function NYSEImpactScreener() {
 
       {/* ── content ──────────────────────────────────────────────────── */}
       <div style={{ maxWidth: 1100, margin: "0 auto", padding: "0 16px" }}>
+        <MarketStateBar marketState={marketState} />
         <StatsBar events={events} />
         <SectorHeatmap events={events} />
+        <SignalPerformance signalData={signalData} />
         <FilterBar filter={filter} setFilter={setFilter} timeFilter={timeFilter}
           setTimeFilter={setTimeFilter} threshold={threshold} setThreshold={setThreshold} />
 
@@ -533,7 +938,8 @@ export default function NYSEImpactScreener() {
             </div>
           ) : (
             filtered.map(event => (
-              <EventCard key={event.id} event={event} isNew={newIds.has(event.id)} />
+              <EventCard key={event.id} event={event} isNew={newIds.has(event.id)}
+                trackedPairs={trackedPairs} onTrack={handleTrack} onUntrack={handleUntrack} />
             ))
           )}
         </div>
