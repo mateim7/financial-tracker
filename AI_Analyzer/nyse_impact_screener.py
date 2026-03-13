@@ -754,6 +754,20 @@ class ScoredEvent:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class ClaudeScorer:
+    # ── Headlines that are almost never market-moving (skip Claude entirely) ──
+    SKIP_PATTERNS = re.compile(
+        r'(?i)('
+        r'\d+\s+(best|top|worst)\s+(stock|etf|fund|pick)|'       # "10 best stocks to buy"
+        r'(morning|evening|daily|weekly)\s+(brief|recap|wrap|roundup)|'  # newsletters
+        r'(opinion|editorial|column|commentary)\s*[:\-–—]|'      # opinion pieces
+        r'(things|reasons|tips|ways)\s+(to|you)|'                 # listicles
+        r'should\s+you\s+(buy|sell|invest)|'                      # clickbait advice
+        r'(what\s+is|how\s+to|beginner|explained|101)|'           # educational
+        r'(podcast|video|interview|transcript|webinar)|'          # media formats
+        r'(sponsored|promoted|partner\s+content|advertisement)'   # ads
+        r')'
+    )
+
     def __init__(self):
         import os
         api_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -765,11 +779,66 @@ class ClaudeScorer:
             self.client = anthropic.Anthropic(api_key=api_key)
             print("  [Claude] API key loaded — enhanced scoring enabled")
 
+        # Token usage tracking
+        self._total_input_tokens = 0
+        self._total_output_tokens = 0
+        self._total_calls = 0
+        self._calls_skipped = 0
+
+        # Recent headline cache — avoid calling Claude for very similar headlines
+        self._recent_headline_hashes: dict[str, float] = {}  # hash -> timestamp
+
+    def _headline_sim_hash(self, headline: str) -> str:
+        """Coarse hash: strip numbers/punctuation so 'NVDA up 5%' and 'NVDA up 3%' match."""
+        coarse = re.sub(r'[^a-z\s]', '', headline.lower())
+        coarse = re.sub(r'\s+', ' ', coarse).strip()
+        return hashlib.md5(coarse.encode()).hexdigest()
+
+    def _should_skip(self, headline: str, scored: ScoredEvent) -> str | None:
+        """Return a skip reason string, or None if Claude should run."""
+        # Skip listicles, opinion pieces, sponsored content, etc.
+        if self.SKIP_PATTERNS.search(headline):
+            return "headline matches skip pattern (opinion/listicle/ad)"
+
+        # Skip if we already called Claude for a very similar headline recently (10 min)
+        h = self._headline_sim_hash(headline)
+        now = time.time()
+        # Clean old entries
+        self._recent_headline_hashes = {k: v for k, v in self._recent_headline_hashes.items() if now - v < 600}
+        if h in self._recent_headline_hashes:
+            return "similar headline already scored in last 10 min"
+
+        # Skip UNKNOWN event type with low automated score (borderline, likely noise)
+        if scored.event_type == EventType.UNKNOWN and scored.impact_score < 50:
+            return "UNKNOWN event type with low auto-score"
+
+        return None
+
+    @property
+    def usage_stats(self) -> dict:
+        return {
+            "total_calls": self._total_calls,
+            "calls_skipped": self._calls_skipped,
+            "input_tokens": self._total_input_tokens,
+            "output_tokens": self._total_output_tokens,
+            "estimated_cost_usd": round(
+                (self._total_input_tokens * 3.0 / 1_000_000) +
+                (self._total_output_tokens * 15.0 / 1_000_000), 4
+            ),
+        }
+
     async def enhance(self, scored: ScoredEvent, headline: str, body: str) -> ScoredEvent:
         """Call Claude to improve scoring fields. Falls back to original if unavailable."""
         if not self.client:
             return scored
         if scored.impact_score < 40:
+            return scored
+
+        # ── Pre-Claude skip checks (saves tokens) ────────────────────────
+        skip_reason = self._should_skip(headline, scored)
+        if skip_reason:
+            self._calls_skipped += 1
+            print(f"  [Claude] Skipped: {skip_reason}")
             return scored
 
         valid_types = [e.value for e in EventType]
@@ -821,6 +890,16 @@ Only correct other scoring fields where automated scoring is clearly wrong. Retu
                 max_tokens=500,
                 messages=[{"role": "user", "content": prompt}]
             )
+
+            # Track token usage
+            self._total_calls += 1
+            if hasattr(response, 'usage'):
+                self._total_input_tokens += getattr(response.usage, 'input_tokens', 0)
+                self._total_output_tokens += getattr(response.usage, 'output_tokens', 0)
+
+            # Cache this headline to avoid duplicate calls
+            self._recent_headline_hashes[self._headline_sim_hash(headline)] = time.time()
+
             text = response.content[0].text.strip()
             if text.startswith("```"):
                 text = text.split("```")[1]
@@ -867,7 +946,8 @@ Only correct other scoring fields where automated scoring is clearly wrong. Retu
         return scored
 
     async def validate_buy(self, scored: ScoredEvent, corroborating: list[dict]) -> ScoredEvent:
-        """Second Claude call to validate BUY signal using corroborating sources."""
+        """Second Claude call to validate BUY signal using corroborating sources.
+        Uses Haiku for this simple yes/no task — ~20x cheaper than Sonnet."""
         if not self.client or not corroborating:
             return scored
         headlines = "\n".join(f"- [{a['source']}] {a['headline']}" for a in corroborating[:3])
@@ -887,10 +967,15 @@ Return ONLY JSON:
         try:
             response = await asyncio.to_thread(
                 self.client.messages.create,
-                model="claude-sonnet-4-6",
+                model="claude-haiku-4-5-20251001",  # Haiku: cheaper for simple validation
                 max_tokens=120,
                 messages=[{"role": "user", "content": prompt}]
             )
+            # Track tokens
+            self._total_calls += 1
+            if hasattr(response, 'usage'):
+                self._total_input_tokens += getattr(response.usage, 'input_tokens', 0)
+                self._total_output_tokens += getattr(response.usage, 'output_tokens', 0)
             text = response.content[0].text.strip()
             if text.startswith("```"):
                 text = text.split("```")[1]
@@ -1987,6 +2072,27 @@ class NYSEReferenceDB:
                      "sub_sector": "QSR", "beta_30d": 0.6},
             "SBUX": {"name": "Starbucks", "sector": "Consumer Disc.", "mcap": "large", "etf": "XLY",
                      "sub_sector": "QSR/Coffee", "beta_30d": 0.9},
+            # ── Consumer Disc. — Specialty Retail / Beauty ────────────────
+            "ULTA": {"name": "Ulta Beauty", "sector": "Consumer Disc.", "mcap": "large", "etf": "XLY",
+                     "sub_sector": "Specialty Beauty Retail", "beta_30d": 1.3},
+            "ELF":  {"name": "e.l.f. Beauty", "sector": "Consumer Disc.", "mcap": "mid", "etf": "XLY",
+                     "sub_sector": "Specialty Beauty", "beta_30d": 1.8},
+            "COTY": {"name": "Coty", "sector": "Consumer Staples", "mcap": "mid", "etf": "XLP",
+                     "sub_sector": "Beauty/Personal Care", "beta_30d": 1.4},
+            "EL":   {"name": "Estée Lauder", "sector": "Consumer Staples", "mcap": "large", "etf": "XLP",
+                     "sub_sector": "Beauty/Personal Care", "beta_30d": 1.2},
+            "TGT":  {"name": "Target", "sector": "Consumer Disc.", "mcap": "large", "etf": "XLY",
+                     "sub_sector": "Big Box Retail", "beta_30d": 1.0},
+            "LOW":  {"name": "Lowe's", "sector": "Consumer Disc.", "mcap": "large", "etf": "XLY",
+                     "sub_sector": "Home Improvement", "beta_30d": 1.0},
+            "TJX":  {"name": "TJX Companies", "sector": "Consumer Disc.", "mcap": "large", "etf": "XLY",
+                     "sub_sector": "Off-Price Retail", "beta_30d": 0.9},
+            "ROST": {"name": "Ross Stores", "sector": "Consumer Disc.", "mcap": "large", "etf": "XLY",
+                     "sub_sector": "Off-Price Retail", "beta_30d": 0.9},
+            "DG":   {"name": "Dollar General", "sector": "Consumer Disc.", "mcap": "large", "etf": "XLY",
+                     "sub_sector": "Discount Retail", "beta_30d": 0.8},
+            "DLTR": {"name": "Dollar Tree", "sector": "Consumer Disc.", "mcap": "mid", "etf": "XLY",
+                     "sub_sector": "Discount Retail", "beta_30d": 1.0},
             "DIS":  {"name": "Walt Disney", "sector": "Communication", "mcap": "large", "etf": "XLC",
                      "sub_sector": "Media/Entertainment", "beta_30d": 1.1},
 
@@ -2231,9 +2337,20 @@ class NYSEReferenceDB:
             "costco": "COST",
             "nike": "NKE",
             "home depot": "HD",
+            "lowe's": "LOW", "lowes": "LOW",
             "mcdonald's": "MCD", "mcdonalds": "MCD",
             "starbucks": "SBUX",
             "disney": "DIS", "walt disney": "DIS",
+            "target": "TGT",
+            "tjx": "TJX", "tj maxx": "TJX", "t.j. maxx": "TJX", "marshalls": "TJX",
+            "ross stores": "ROST", "ross": "ROST",
+            "dollar general": "DG",
+            "dollar tree": "DLTR",
+            # Beauty / Personal Care
+            "ulta": "ULTA", "ulta beauty": "ULTA",
+            "elf beauty": "ELF", "e.l.f.": "ELF", "e.l.f. beauty": "ELF",
+            "coty": "COTY",
+            "estee lauder": "EL", "estée lauder": "EL", "lauder": "EL",
             # Utilities
             "duke energy": "DUK",
             "southern company": "SO",
@@ -2395,6 +2512,21 @@ class NYSEReferenceDB:
                 "suppliers": [],
                 "customers": [],
                 "peers": ["NEM", "NUE"],
+            },
+            "ULTA": {
+                "suppliers": ["EL", "COTY", "ELF"],
+                "customers": [],
+                "peers": ["ELF", "COTY", "EL", "TGT"],
+            },
+            "ELF": {
+                "suppliers": [],
+                "customers": ["ULTA", "TGT", "WMT"],
+                "peers": ["COTY", "EL"],
+            },
+            "TGT": {
+                "suppliers": ["PG", "KO"],
+                "customers": [],
+                "peers": ["WMT", "COST", "DG"],
             },
         }
 
@@ -3442,6 +3574,10 @@ class NYSEImpactScreener:
                 for t, v in extra_avail.items():
                     scored.price_data[t] = {"price": v.get("price"), "change_pct": v.get("change_pct")}
 
+            # ── POST-CLAUDE FILTER — drop if Claude re-scored below threshold ──
+            if scored.impact_score < 40:
+                return None
+
         self.processed_count += 1
         self.db.insert(scored)
 
@@ -3509,6 +3645,12 @@ class NYSEImpactScreener:
         print(f"  {c['WHITE']}{'═' * 76}{c['RESET']}")
         print(f"    Events processed:  {self.processed_count}")
         print(f"    Alerts triggered:  {self.alert_count}")
+
+        # Claude API usage stats
+        usage = self.claude_scorer.usage_stats
+        print(f"    Claude API calls:  {usage['total_calls']}  (skipped: {usage['calls_skipped']})")
+        print(f"    Tokens used:       {usage['input_tokens']:,} in / {usage['output_tokens']:,} out")
+        print(f"    Estimated cost:    ${usage['estimated_cost_usd']:.4f}")
 
         if results:
             scores = [r.impact_score for r in results]
