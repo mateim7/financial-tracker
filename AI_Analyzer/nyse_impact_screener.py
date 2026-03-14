@@ -217,30 +217,60 @@ async def start_http_server(db: "EventDatabase"):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 RSS_SOURCES = [
-    # ── Tier 1: Institutional / Wire Services ───────────────────────────────
+    # ── Tier 1: Wire Services & Institutional (fastest, most reliable) ──────
     {"url": "https://feeds.content.dowjones.io/public/rss/mw_topstories",     "name": "MarketWatch DJ",    "tier": 1},
     {"url": "https://feeds.a.dj.com/rss/WSJcomUSBusiness.xml",                "name": "WSJ Business",      "tier": 1},
     {"url": "https://feeds.a.dj.com/rss/RSSMarketsMain.xml",                  "name": "WSJ Markets",       "tier": 1},
+    {"url": "https://feeds.a.dj.com/rss/RSSWorldNews.xml",                    "name": "WSJ World",         "tier": 1},
+    {"url": "https://feeds.reuters.com/reuters/businessNews",                  "name": "Reuters Business",  "tier": 1},
+    {"url": "https://feeds.reuters.com/reuters/companyNews",                   "name": "Reuters Companies", "tier": 1},
+    {"url": "https://feeds.bbci.co.uk/news/business/rss.xml",                 "name": "BBC Business",      "tier": 1},
+    {"url": "https://rss.nytimes.com/services/xml/rss/nyt/Business.xml",      "name": "NYT Business",      "tier": 1},
+    {"url": "https://feeds.ft.com/rss/companies/us",                          "name": "FT US Companies",   "tier": 1},
+    {"url": "https://feeds.bloomberg.com/markets/news.rss",                   "name": "Bloomberg Mkts",    "tier": 1},
 
     # ── Tier 2: Professional Financial Media ─────────────────────────────────
     {"url": "https://www.cnbc.com/id/100003114/device/rss/rss.html",          "name": "CNBC",              "tier": 2},
     {"url": "https://www.cnbc.com/id/10001147/device/rss/rss.html",           "name": "CNBC Markets",      "tier": 2},
     {"url": "https://www.cnbc.com/id/20910258/device/rss/rss.html",           "name": "CNBC Finance",      "tier": 2},
     {"url": "https://www.cnbc.com/id/15839135/device/rss/rss.html",           "name": "CNBC Tech",         "tier": 2},
+    {"url": "https://www.cnbc.com/id/10000664/device/rss/rss.html",           "name": "CNBC Economy",      "tier": 2},
     {"url": "https://feeds.marketwatch.com/marketwatch/topstories/",          "name": "MarketWatch",       "tier": 2},
+    {"url": "https://feeds.marketwatch.com/marketwatch/marketpulse/",         "name": "MW Pulse",          "tier": 2},
     {"url": "https://www.investing.com/rss/news.rss",                         "name": "Investing.com",     "tier": 2},
+    {"url": "https://www.investing.com/rss/market_overview.rss",              "name": "Investing Mkt",     "tier": 2},
     {"url": "https://finance.yahoo.com/news/rssindex",                        "name": "Yahoo Finance",     "tier": 2},
     {"url": "https://finance.yahoo.com/rss/2.0/headline?s=%5EGSPC",          "name": "Yahoo S&P News",    "tier": 2},
-    {"url": "https://www.thestreet.com/rss/main.xml",                         "name": "TheStreet",         "tier": 2},
+    {"url": "https://finance.yahoo.com/rss/2.0/headline?s=%5EDJI",           "name": "Yahoo DJIA News",   "tier": 2},
+    {"url": "https://finance.yahoo.com/rss/2.0/headline?s=%5EIXIC",          "name": "Yahoo Nasdaq News", "tier": 2},
     {"url": "https://seekingalpha.com/feed.xml",                              "name": "Seeking Alpha",     "tier": 2},
-    {"url": "https://www.zacks.com/rss/newsroom.php",                         "name": "Zacks",             "tier": 2},
-    {"url": "https://www.fool.com/feeds/foolwatch/",                          "name": "Motley Fool",       "tier": 2},
+    {"url": "https://seekingalpha.com/feed/market-news.xml",                  "name": "SA Market News",    "tier": 2},
     {"url": "https://www.benzinga.com/feed",                                  "name": "Benzinga",          "tier": 2},
     {"url": "https://www.nasdaq.com/feed/rssoutbound?category=Markets",       "name": "Nasdaq Markets",    "tier": 2},
     {"url": "https://www.nasdaq.com/feed/rssoutbound?category=Earnings",      "name": "Nasdaq Earnings",   "tier": 2},
+    {"url": "https://www.nasdaq.com/feed/rssoutbound?category=IPOs",          "name": "Nasdaq IPOs",       "tier": 2},
+    {"url": "https://www.barrons.com/feed",                                   "name": "Barron's",          "tier": 2},
+
+    # ── Tier 2: Wire / PR (earnings releases, M&A, FDA) ─────────────────────
     {"url": "https://feeds.businesswire.com/rss/home/?rss=G1&rssid=1",       "name": "Business Wire",     "tier": 2},
     {"url": "https://www.globenewswire.com/RssFeed/subjectcode/17-Financial%20Markets", "name": "GlobeNewsWire", "tier": 2},
     {"url": "https://www.prnewswire.com/rss/news-releases-list.rss",          "name": "PR Newswire",       "tier": 2},
+    {"url": "https://www.accesswire.com/rss/feed.aspx",                       "name": "AccessWire",        "tier": 2},
+
+    # ── Tier 2: Macro / Geopolitical / Commodities ───────────────────────────
+    {"url": "https://feeds.reuters.com/reuters/world-news",                    "name": "Reuters World",     "tier": 2},
+    {"url": "https://rss.nytimes.com/services/xml/rss/nyt/Economy.xml",       "name": "NYT Economy",       "tier": 2},
+    {"url": "https://feeds.feedburner.com/zaborskaya/oil-price",              "name": "Oil Price",         "tier": 2},
+    {"url": "https://www.federalreserve.gov/feeds/press_all.xml",             "name": "Fed Reserve",       "tier": 1},
+
+    # ── Tier 3: Sector-specific ──────────────────────────────────────────────
+    {"url": "https://techcrunch.com/feed/",                                    "name": "TechCrunch",        "tier": 3},
+    {"url": "https://www.theverge.com/rss/index.xml",                          "name": "The Verge",         "tier": 3},
+    {"url": "https://arstechnica.com/feed/",                                   "name": "Ars Technica",      "tier": 3},
+    {"url": "https://www.statnews.com/feed/",                                  "name": "STAT News",         "tier": 3},
+    {"url": "https://www.fiercepharma.com/rss/xml",                            "name": "Fierce Pharma",     "tier": 3},
+    {"url": "https://electrek.co/feed/",                                       "name": "Electrek",          "tier": 3},
+    {"url": "https://www.spglobal.com/commodityinsights/en/rss-feed/oil",     "name": "S&P Oil",           "tier": 3},
 ]
 
 # ── Per-ticker Yahoo Finance RSS — watches these stocks specifically ─────────
@@ -319,21 +349,26 @@ class RSSFeed:
                                     if pub_ts < cutoff:
                                         continue
                                 except Exception:
-                                    continue  # can't parse date at all → skip
-                            else:
-                                continue  # has date string but unparseable → skip
-                    else:
-                        # No publish date at all → skip (can't verify freshness)
+                                    pass  # can't parse date → allow through, dedup will handle it
+                            # else: has date string but unparseable → allow through
+                    # No publish date → allow through (many feeds omit dates)
+                    # Deduplication via _seen_ids prevents re-processing on restart
+                    raw_title = entry.get("title", "").strip()
+                    if not raw_title:
                         continue
-                    headline = entry.get("title", "").strip()
+                    # Strip HTML tags from title and body (some feeds embed raw HTML)
+                    headline = re.sub(r'<[^>]+>', '', raw_title).strip()
+                    headline = headline.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">").replace("&#39;", "'").replace("&quot;", '"')
                     if not headline:
                         continue
+                    raw_body = entry.get("summary", entry.get("description", ""))
+                    body = re.sub(r'<[^>]+>', '', raw_body).strip() if raw_body else ""
                     items.append({
                         "uid": uid,
                         "source": source["name"],
                         "source_tier": source["tier"],
                         "headline": headline,
-                        "body": entry.get("summary", entry.get("description", "")),
+                        "body": body,
                         "link": entry.get("link", ""),
                     })
             except Exception as e:
@@ -859,11 +894,23 @@ class ClaudeScorer:
 
         valid_types = [e.value for e in EventType]
         tickers_str = ", ".join(scored.affected_tickers) if scored.affected_tickers else "MACRO"
+
+        # Build live price context string for Claude
+        price_context_parts = []
+        if scored.price_data:
+            for t, pd in scored.price_data.items():
+                if pd.get("price") and pd.get("change_pct") is not None:
+                    price_context_parts.append(f"  {t}: ${pd['price']} ({pd['change_pct']:+.2f}% today)")
+        price_context = "\n".join(price_context_parts) if price_context_parts else "  (prices unavailable)"
+
         prompt = f"""You are a financial news analyst. Analyze this news headline and return ONLY a JSON object.
 
 Headline: {headline}
 Body: {body[:400] if body else "N/A"}
 Affected tickers: {tickers_str}
+
+Live market data (today's price action):
+{price_context}
 
 Current automated scoring:
 - event_type: {scored.event_type.value}
@@ -908,6 +955,8 @@ CRITICAL RULES:
 - Article about "open-weight AI models" → Do NOT add Hugging Face or any AI platform ticker that isn't mentioned.
 - Article about "cloud computing" → Do NOT add random cloud companies that aren't discussed.
 - A person endorsing a company → Do NOT add that person's company unless the article discusses impact on it.
+
+3. "Respect the tape": The live market data above shows how each stock is ACTUALLY trading right now. If a stock is up significantly (+3% or more) today, do NOT issue a SELL signal on it unless you have extremely high conviction (85%+) — you would be telling someone to short a stock with strong buying momentum, which is extremely dangerous. Conversely, if a stock is down significantly (-3% or more), be cautious about issuing a BUY signal. Price action reflects information you may not have. When the tape contradicts your thesis, default to HOLD or reduce confidence substantially.
 
 Only include the tickers of companies, sectors, commodities, or ETFs that are actually AFFECTED by the news.
 
@@ -2509,6 +2558,7 @@ class NYSEReferenceDB:
 
         # ── SECTOR → ETF CONTAGION MAP ─────────────────────────────────────
         self.sector_correlations: dict[str, list[str]] = {
+            "Crypto":            ["IBIT", "BITO", "WGMI", "BITQ"],
             "Semiconductors":    ["SMH", "SOXX", "XSD", "PSI"],
             "Energy":            ["XLE", "XOP", "OIH", "AMLP", "TAN"],
             "Financials":        ["XLF", "KRE", "KBE", "IAI"],
@@ -2750,8 +2800,14 @@ class EntityExtractor:
                 )
             else:
                 self._alias_patterns[alias] = (None, ticker)  # plain substring
-        # Sector keywords for macro events that don't mention specific companies
+        # Sector keywords for macro events that don't mention specific companies.
+        # Order matters: Crypto is checked first so "bitcoin" articles don't fall
+        # through to Materials just because "gold" appears in comparison text.
         self.sector_keywords: dict[str, list[str]] = {
+            "Crypto": ["bitcoin", "btc", "ethereum", "eth ", "crypto", "cryptocurrency",
+                       "blockchain", "defi", "stablecoin", "digital asset", "microstrategy",
+                       "bitcoin etf", "spot etf", "crypto regulation", "digital currency",
+                       "altcoin", "memecoin", "nft"],
             "Semiconductors": ["chip", "semiconductor", "wafer", "fab ", "foundry", "gpu", "ai chip",
                                "hbm", "memory chip", "processor", "lithography"],
             "Energy": ["oil", "crude", "natural gas", "lng", "opec", "drilling", "refinery",
@@ -2766,8 +2822,9 @@ class EntityExtractor:
                           "wind farm", "data center power", "grid reliability"],
             "REITs": ["commercial real estate", "office vacancy", "data center",
                       "warehouse", "industrial real estate", "cell tower"],
-            "Materials": ["copper", "gold", "steel", "aluminum", "lithium", "rare earth",
-                          "mining", "commodity", "iron ore"],
+            "Materials": ["copper", "gold price", "gold miner", "steel", "aluminum", "lithium",
+                          "rare earth", "mining", "commodity", "iron ore", "gold futures",
+                          "precious metal"],
         }
 
     def extract(self, headline: str, body: str = "") -> dict:
