@@ -1,7 +1,6 @@
 import "./App.css";
 import { useState, useEffect, useRef } from "react";
 import Backtesting from "./Backtesting";
-import TechnicalIndicatorsOverlay, { TechMiniBadge } from "./TechnicalIndicators";
 
 /* ── helpers ─────────────────────────────────────────────────────────────── */
 function getSeverity(score) {
@@ -375,17 +374,11 @@ function EventCard({ event, isNew, trackedPairs, onTrack, onUntrack }) {
         );
       })()}
 
-      {/* tickers + prices + tech mini badges + etfs row */}
+      {/* tickers + prices + etfs row */}
       <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
         {event.tickers.length > 0 ? event.tickers.map(t => {
           const pd = event.price_data && event.price_data[t];
-          const td = event.technical_data && event.technical_data[t];
-          return (
-            <span key={t} style={{ display: "inline-flex", alignItems: "center", gap: 3 }}>
-              <TickerPill ticker={t} priceData={pd} />
-              <TechMiniBadge data={td} />
-            </span>
-          );
+          return <TickerPill key={t} ticker={t} priceData={pd} />;
         }) : (
           <span style={{ fontSize: 12, color: "#aeaeb2", fontStyle: "italic" }}>Macro — broad market</span>
         )}
@@ -394,13 +387,7 @@ function EventCard({ event, isNew, trackedPairs, onTrack, onUntrack }) {
             .filter(t => event.price_data && event.price_data[t] && !event.tickers.includes(t))
             .map(t => {
               const pd = event.price_data[t];
-              const td = event.technical_data && event.technical_data[t];
-              return (
-                <span key={t} style={{ display: "inline-flex", alignItems: "center", gap: 3 }}>
-                  <TickerPill ticker={t} priceData={pd} />
-                  <TechMiniBadge data={td} />
-                </span>
-              );
+              return <TickerPill key={t} ticker={t} priceData={pd} />;
             })
         )}
         {event.etfs && event.etfs.length > 0 && (
@@ -409,14 +396,6 @@ function EventCard({ event, isNew, trackedPairs, onTrack, onUntrack }) {
           </span>
         )}
       </div>
-
-      {/* technical indicators overlay — detailed view for primary tickers */}
-      {event.technical_data && event.tickers && event.tickers.length > 0 && (() => {
-        const firstTicker = event.tickers[0];
-        const td = event.technical_data[firstTicker];
-        if (!td || !td.available) return null;
-        return <TechnicalIndicatorsOverlay data={td} />;
-      })()}
     </div>
   );
 }

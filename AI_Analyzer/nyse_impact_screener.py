@@ -138,7 +138,6 @@ async def broadcast_event(event):
         "url":                event.url,
         "stock_availability": event.stock_availability,
         "price_data":         event.price_data,
-        "technical_data":     event.technical_data,
         "ws_source":          event.ws_source,
     }
     message = json.dumps(payload)
@@ -200,45 +199,15 @@ async def events_handler(request):
     )
 
 
-async def tech_indicators_handler(request):
-    """Serves technical indicators (RSI, MACD, volume) for given tickers."""
-    tickers_param = request.query.get("tickers", "")
-    if not tickers_param:
-        return aiohttp_web.Response(
-            text=json.dumps({"error": "tickers parameter required"}),
-            content_type="application/json",
-            headers={"Access-Control-Allow-Origin": "*"},
-            status=400,
-        )
-    tickers = [t.strip().upper() for t in tickers_param.split(",") if t.strip()]
-    tech = request.app.get("tech_indicators")
-    if not tech:
-        return aiohttp_web.Response(
-            text=json.dumps({"error": "technical indicators not available"}),
-            content_type="application/json",
-            headers={"Access-Control-Allow-Origin": "*"},
-            status=503,
-        )
-    data = await tech.get_indicators(tickers[:10])  # limit to 10 tickers per request
-    return aiohttp_web.Response(
-        text=json.dumps(data),
-        content_type="application/json",
-        headers={"Access-Control-Allow-Origin": "*"},
-    )
-
-
-async def start_http_server(db: "EventDatabase", tech_indicators=None):
+async def start_http_server(db: "EventDatabase"):
     from backtesting_api import setup_backtesting_routes
 
     app = aiohttp_web.Application()
     app["db"] = db
-    if tech_indicators:
-        app["tech_indicators"] = tech_indicators
     app.router.add_get("/download/{fmt}", http_handler)
     app.router.add_get("/download", http_handler)
     app.router.add_get("/api/signals", signals_handler)
     app.router.add_get("/api/events", events_handler)
-    app.router.add_get("/api/tech-indicators", tech_indicators_handler)
     setup_backtesting_routes(app)
     runner = aiohttp_web.AppRunner(app)
     await runner.setup()
@@ -848,7 +817,6 @@ class ScoredEvent:
     url: str = ""
     stock_availability: dict = field(default_factory=dict)
     price_data: dict = field(default_factory=dict)
-    technical_data: dict = field(default_factory=dict)  # {ticker: {rsi, macd, volume, tech_signal, ...}}
     latency_ms: float = 0.0
     ws_source: bool = False   # True if from WebSocket feed
 
@@ -3735,8 +3703,6 @@ class NYSEImpactScreener:
         self.alert_dispatcher = AlertDispatcher()
         self.claude_scorer = ClaudeScorer(known_tickers=self.entity_extractor._all_known_tickers)
         self.availability_checker = StockAvailabilityChecker()
-        from technical_indicators import TechnicalIndicators
-        self.tech_indicators = TechnicalIndicators()
         self.db = EventDatabase()
         self.signal_tracker = SignalOutcomeTracker(self.db)
         self.rss = None
@@ -3803,14 +3769,6 @@ class NYSEImpactScreener:
                 scored.stock_availability.update(extra_avail)
                 for t, v in extra_avail.items():
                     scored.price_data[t] = {"price": v.get("price"), "change_pct": v.get("change_pct")}
-
-            # Fetch technical indicators for all affected tickers
-            all_tickers = list(set(scored.affected_tickers) | set(scored.ticker_signals.keys()))
-            if all_tickers:
-                try:
-                    scored.technical_data = await self.tech_indicators.get_indicators(all_tickers[:8])
-                except Exception as e:
-                    print(f"  [TechInd] Failed to fetch indicators: {e}")
 
             # ── POST-CLAUDE FILTER — drop if Claude re-scored below threshold ──
             if scored.impact_score < 40:
@@ -3930,7 +3888,7 @@ async def main():
     rss = RSSFeed()
     ws_news = WebSocketNewsFeed()  # auto-detects providers from env vars
     screener.rss = rss
-    await start_http_server(screener.db, tech_indicators=screener.tech_indicators)
+    await start_http_server(screener.db)
 
     # Wire up global references so WS handler can send state on connect
     _LIVE_MARKET_STATE = screener.reference_db.live_market
