@@ -381,11 +381,13 @@ function EventCard({ event, isNew, trackedPairs, onTrack, onUntrack }) {
         }) : (
           <span style={{ fontSize: 12, color: "#aeaeb2", fontStyle: "italic" }}>Macro — broad market</span>
         )}
-        {event.correlated_moves && event.correlated_moves.length > 0 && event.tickers.length === 0 && (
-          event.correlated_moves.filter(t => event.price_data && event.price_data[t]).map(t => {
-            const pd = event.price_data[t];
-            return <TickerPill key={t} ticker={t} priceData={pd} />;
-          })
+        {event.correlated_moves && event.correlated_moves.length > 0 && (
+          event.correlated_moves
+            .filter(t => event.price_data && event.price_data[t] && !event.tickers.includes(t))
+            .map(t => {
+              const pd = event.price_data[t];
+              return <TickerPill key={t} ticker={t} priceData={pd} />;
+            })
         )}
         {event.etfs && event.etfs.length > 0 && (
           <span style={{ fontSize: 11, color: "#aeaeb2", marginLeft: 4, fontWeight: 500 }}>
