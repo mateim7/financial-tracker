@@ -190,7 +190,8 @@ async def events_handler(request):
     """Serves recent events from the DB for page reload / initial load."""
     db = request.app["db"]
     limit = int(request.query.get("limit", 100))
-    events = db.get_recent_events(min(limit, 500))
+    max_age = int(request.query.get("max_age", 3600))  # default 1 hour
+    events = db.get_recent_events(min(limit, 500), max_age_seconds=min(max_age, 86400))
     return aiohttp_web.Response(
         text=json.dumps(events),
         content_type="application/json",
@@ -220,30 +221,60 @@ async def start_http_server(db: "EventDatabase"):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 RSS_SOURCES = [
-    # ── Tier 1: Institutional / Wire Services ───────────────────────────────
+    # ── Tier 1: Wire Services & Institutional (fastest, most reliable) ──────
     {"url": "https://feeds.content.dowjones.io/public/rss/mw_topstories",     "name": "MarketWatch DJ",    "tier": 1},
     {"url": "https://feeds.a.dj.com/rss/WSJcomUSBusiness.xml",                "name": "WSJ Business",      "tier": 1},
     {"url": "https://feeds.a.dj.com/rss/RSSMarketsMain.xml",                  "name": "WSJ Markets",       "tier": 1},
+    {"url": "https://feeds.a.dj.com/rss/RSSWorldNews.xml",                    "name": "WSJ World",         "tier": 1},
+    {"url": "https://feeds.reuters.com/reuters/businessNews",                  "name": "Reuters Business",  "tier": 1},
+    {"url": "https://feeds.reuters.com/reuters/companyNews",                   "name": "Reuters Companies", "tier": 1},
+    {"url": "https://feeds.bbci.co.uk/news/business/rss.xml",                 "name": "BBC Business",      "tier": 1},
+    {"url": "https://rss.nytimes.com/services/xml/rss/nyt/Business.xml",      "name": "NYT Business",      "tier": 1},
+    {"url": "https://feeds.ft.com/rss/companies/us",                          "name": "FT US Companies",   "tier": 1},
+    {"url": "https://feeds.bloomberg.com/markets/news.rss",                   "name": "Bloomberg Mkts",    "tier": 1},
 
     # ── Tier 2: Professional Financial Media ─────────────────────────────────
     {"url": "https://www.cnbc.com/id/100003114/device/rss/rss.html",          "name": "CNBC",              "tier": 2},
     {"url": "https://www.cnbc.com/id/10001147/device/rss/rss.html",           "name": "CNBC Markets",      "tier": 2},
     {"url": "https://www.cnbc.com/id/20910258/device/rss/rss.html",           "name": "CNBC Finance",      "tier": 2},
     {"url": "https://www.cnbc.com/id/15839135/device/rss/rss.html",           "name": "CNBC Tech",         "tier": 2},
+    {"url": "https://www.cnbc.com/id/10000664/device/rss/rss.html",           "name": "CNBC Economy",      "tier": 2},
     {"url": "https://feeds.marketwatch.com/marketwatch/topstories/",          "name": "MarketWatch",       "tier": 2},
+    {"url": "https://feeds.marketwatch.com/marketwatch/marketpulse/",         "name": "MW Pulse",          "tier": 2},
     {"url": "https://www.investing.com/rss/news.rss",                         "name": "Investing.com",     "tier": 2},
+    {"url": "https://www.investing.com/rss/market_overview.rss",              "name": "Investing Mkt",     "tier": 2},
     {"url": "https://finance.yahoo.com/news/rssindex",                        "name": "Yahoo Finance",     "tier": 2},
     {"url": "https://finance.yahoo.com/rss/2.0/headline?s=%5EGSPC",          "name": "Yahoo S&P News",    "tier": 2},
-    {"url": "https://www.thestreet.com/rss/main.xml",                         "name": "TheStreet",         "tier": 2},
+    {"url": "https://finance.yahoo.com/rss/2.0/headline?s=%5EDJI",           "name": "Yahoo DJIA News",   "tier": 2},
+    {"url": "https://finance.yahoo.com/rss/2.0/headline?s=%5EIXIC",          "name": "Yahoo Nasdaq News", "tier": 2},
     {"url": "https://seekingalpha.com/feed.xml",                              "name": "Seeking Alpha",     "tier": 2},
-    {"url": "https://www.zacks.com/rss/newsroom.php",                         "name": "Zacks",             "tier": 2},
-    {"url": "https://www.fool.com/feeds/foolwatch/",                          "name": "Motley Fool",       "tier": 2},
+    {"url": "https://seekingalpha.com/feed/market-news.xml",                  "name": "SA Market News",    "tier": 2},
     {"url": "https://www.benzinga.com/feed",                                  "name": "Benzinga",          "tier": 2},
     {"url": "https://www.nasdaq.com/feed/rssoutbound?category=Markets",       "name": "Nasdaq Markets",    "tier": 2},
     {"url": "https://www.nasdaq.com/feed/rssoutbound?category=Earnings",      "name": "Nasdaq Earnings",   "tier": 2},
+    {"url": "https://www.nasdaq.com/feed/rssoutbound?category=IPOs",          "name": "Nasdaq IPOs",       "tier": 2},
+    {"url": "https://www.barrons.com/feed",                                   "name": "Barron's",          "tier": 2},
+
+    # ── Tier 2: Wire / PR (earnings releases, M&A, FDA) ─────────────────────
     {"url": "https://feeds.businesswire.com/rss/home/?rss=G1&rssid=1",       "name": "Business Wire",     "tier": 2},
     {"url": "https://www.globenewswire.com/RssFeed/subjectcode/17-Financial%20Markets", "name": "GlobeNewsWire", "tier": 2},
     {"url": "https://www.prnewswire.com/rss/news-releases-list.rss",          "name": "PR Newswire",       "tier": 2},
+    {"url": "https://www.accesswire.com/rss/feed.aspx",                       "name": "AccessWire",        "tier": 2},
+
+    # ── Tier 2: Macro / Geopolitical / Commodities ───────────────────────────
+    {"url": "https://feeds.reuters.com/reuters/world-news",                    "name": "Reuters World",     "tier": 2},
+    {"url": "https://rss.nytimes.com/services/xml/rss/nyt/Economy.xml",       "name": "NYT Economy",       "tier": 2},
+    {"url": "https://feeds.feedburner.com/zaborskaya/oil-price",              "name": "Oil Price",         "tier": 2},
+    {"url": "https://www.federalreserve.gov/feeds/press_all.xml",             "name": "Fed Reserve",       "tier": 1},
+
+    # ── Tier 3: Sector-specific ──────────────────────────────────────────────
+    {"url": "https://techcrunch.com/feed/",                                    "name": "TechCrunch",        "tier": 3},
+    {"url": "https://www.theverge.com/rss/index.xml",                          "name": "The Verge",         "tier": 3},
+    {"url": "https://arstechnica.com/feed/",                                   "name": "Ars Technica",      "tier": 3},
+    {"url": "https://www.statnews.com/feed/",                                  "name": "STAT News",         "tier": 3},
+    {"url": "https://www.fiercepharma.com/rss/xml",                            "name": "Fierce Pharma",     "tier": 3},
+    {"url": "https://electrek.co/feed/",                                       "name": "Electrek",          "tier": 3},
+    {"url": "https://www.spglobal.com/commodityinsights/en/rss-feed/oil",     "name": "S&P Oil",           "tier": 3},
 ]
 
 # ── Per-ticker Yahoo Finance RSS — watches these stocks specifically ─────────
@@ -292,7 +323,7 @@ class RSSFeed:
         import aiohttp
         import email.utils
 
-        cutoff = time.time() - 86400  # only articles from last 24 hours
+        cutoff = time.time() - 3600  # only articles from last 1 hour
         headers = {"User-Agent": "Mozilla/5.0 (compatible; FinanceScreener/1.0)"}
         connector = aiohttp.TCPConnector(ssl=False)  # skip SSL cert verify for some feeds
 
@@ -306,24 +337,61 @@ class RSSFeed:
                     uid = entry.get("id") or entry.get("link") or entry.get("title")
                     if not uid or uid in self._seen_ids:
                         continue
+                    # ── 60-Minute Hard Stop: only process articles published within last hour ──
+                    # Rule 1: Articles older than 60 minutes are discarded immediately
+                    # Rule 2: Use the ORIGINAL publication timestamp, not scrape/index time
+                    # Rule 3: If no valid publication date can be determined, discard the article
+                    pub_ts = None
                     published = entry.get("published") or entry.get("updated")
                     if published:
                         try:
                             pub_ts = email.utils.parsedate_to_datetime(published).timestamp()
-                            if pub_ts < cutoff:
-                                continue
                         except Exception:
-                            pass
-                    headline = entry.get("title", "").strip()
+                            # Try feedparser's parsed time tuple as fallback
+                            pub_struct = entry.get("published_parsed") or entry.get("updated_parsed")
+                            if pub_struct:
+                                try:
+                                    import calendar
+                                    pub_ts = calendar.timegm(pub_struct)
+                                except Exception:
+                                    pass
+                    else:
+                        # No date string — try parsed structs directly
+                        pub_struct = entry.get("published_parsed") or entry.get("updated_parsed")
+                        if pub_struct:
+                            try:
+                                import calendar
+                                pub_ts = calendar.timegm(pub_struct)
+                            except Exception:
+                                pass
+
+                    # STRICT: No valid publication timestamp → skip entirely
+                    if pub_ts is None:
+                        continue
+                    # STRICT: Article older than 60 minutes → discard
+                    if pub_ts < cutoff:
+                        continue
+                    # Guard against future timestamps (clock skew) — clamp to now
+                    if pub_ts > time.time() + 300:  # allow 5min tolerance
+                        continue
+                    raw_title = entry.get("title", "").strip()
+                    if not raw_title:
+                        continue
+                    # Strip HTML tags from title and body (some feeds embed raw HTML)
+                    headline = re.sub(r'<[^>]+>', '', raw_title).strip()
+                    headline = headline.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">").replace("&#39;", "'").replace("&quot;", '"')
                     if not headline:
                         continue
+                    raw_body = entry.get("summary", entry.get("description", ""))
+                    body = re.sub(r'<[^>]+>', '', raw_body).strip() if raw_body else ""
                     items.append({
                         "uid": uid,
                         "source": source["name"],
                         "source_tier": source["tier"],
                         "headline": headline,
-                        "body": entry.get("summary", entry.get("description", "")),
+                        "body": body,
                         "link": entry.get("link", ""),
+                        "pub_ts": pub_ts,  # original publication timestamp
                     })
             except Exception as e:
                 print(f"  [RSS] Failed to fetch {source['name']}: {e}")
@@ -758,8 +826,23 @@ class ScoredEvent:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class ClaudeScorer:
-    def __init__(self):
+    # ── Headlines that are almost never market-moving (skip Claude entirely) ──
+    SKIP_PATTERNS = re.compile(
+        r'(?i)('
+        r'\d+\s+(best|top|worst)\s+(stock|etf|fund|pick)|'       # "10 best stocks to buy"
+        r'(morning|evening|daily|weekly)\s+(brief|recap|wrap|roundup)|'  # newsletters
+        r'(opinion|editorial|column|commentary)\s*[:\-–—]|'      # opinion pieces
+        r'(things|reasons|tips|ways)\s+(to|you)|'                 # listicles
+        r'should\s+you\s+(buy|sell|invest)|'                      # clickbait advice
+        r'(what\s+is|how\s+to|beginner|explained|101)|'           # educational
+        r'(podcast|video|interview|transcript|webinar)|'          # media formats
+        r'(sponsored|promoted|partner\s+content|advertisement)'   # ads
+        r')'
+    )
+
+    def __init__(self, known_tickers: set[str] = None):
         import os
+        self._known_tickers = known_tickers or set()
         api_key = os.environ.get("ANTHROPIC_API_KEY")
         if not api_key:
             print("  [Claude] ANTHROPIC_API_KEY not set — falling back to keyword scoring")
@@ -769,6 +852,54 @@ class ClaudeScorer:
             self.client = anthropic.Anthropic(api_key=api_key)
             print("  [Claude] API key loaded — enhanced scoring enabled")
 
+        # Token usage tracking
+        self._total_input_tokens = 0
+        self._total_output_tokens = 0
+        self._total_calls = 0
+        self._calls_skipped = 0
+
+        # Recent headline cache — avoid calling Claude for very similar headlines
+        self._recent_headline_hashes: dict[str, float] = {}  # hash -> timestamp
+
+    def _headline_sim_hash(self, headline: str) -> str:
+        """Coarse hash: strip numbers/punctuation so 'NVDA up 5%' and 'NVDA up 3%' match."""
+        coarse = re.sub(r'[^a-z\s]', '', headline.lower())
+        coarse = re.sub(r'\s+', ' ', coarse).strip()
+        return hashlib.md5(coarse.encode()).hexdigest()
+
+    def _should_skip(self, headline: str, scored: ScoredEvent) -> str | None:
+        """Return a skip reason string, or None if Claude should run."""
+        # Skip listicles, opinion pieces, sponsored content, etc.
+        if self.SKIP_PATTERNS.search(headline):
+            return "headline matches skip pattern (opinion/listicle/ad)"
+
+        # Skip if we already called Claude for a very similar headline recently (10 min)
+        h = self._headline_sim_hash(headline)
+        now = time.time()
+        # Clean old entries
+        self._recent_headline_hashes = {k: v for k, v in self._recent_headline_hashes.items() if now - v < 600}
+        if h in self._recent_headline_hashes:
+            return "similar headline already scored in last 10 min"
+
+        # Skip UNKNOWN event type with low automated score (borderline, likely noise)
+        if scored.event_type == EventType.UNKNOWN and scored.impact_score < 50:
+            return "UNKNOWN event type with low auto-score"
+
+        return None
+
+    @property
+    def usage_stats(self) -> dict:
+        return {
+            "total_calls": self._total_calls,
+            "calls_skipped": self._calls_skipped,
+            "input_tokens": self._total_input_tokens,
+            "output_tokens": self._total_output_tokens,
+            "estimated_cost_usd": round(
+                (self._total_input_tokens * 3.0 / 1_000_000) +
+                (self._total_output_tokens * 15.0 / 1_000_000), 4
+            ),
+        }
+
     async def enhance(self, scored: ScoredEvent, headline: str, body: str) -> ScoredEvent:
         """Call Claude to improve scoring fields. Falls back to original if unavailable."""
         if not self.client:
@@ -776,13 +907,32 @@ class ClaudeScorer:
         if scored.impact_score < 40:
             return scored
 
+        # ── Pre-Claude skip checks (saves tokens) ────────────────────────
+        skip_reason = self._should_skip(headline, scored)
+        if skip_reason:
+            self._calls_skipped += 1
+            print(f"  [Claude] Skipped: {skip_reason}")
+            return scored
+
         valid_types = [e.value for e in EventType]
         tickers_str = ", ".join(scored.affected_tickers) if scored.affected_tickers else "MACRO"
+
+        # Build live price context string for Claude
+        price_context_parts = []
+        if scored.price_data:
+            for t, pd in scored.price_data.items():
+                if pd.get("price") and pd.get("change_pct") is not None:
+                    price_context_parts.append(f"  {t}: ${pd['price']} ({pd['change_pct']:+.2f}% today)")
+        price_context = "\n".join(price_context_parts) if price_context_parts else "  (prices unavailable)"
+
         prompt = f"""You are a financial news analyst. Analyze this news headline and return ONLY a JSON object.
 
 Headline: {headline}
 Body: {body[:400] if body else "N/A"}
 Affected tickers: {tickers_str}
+
+Live market data (today's price action):
+{price_context}
 
 Current automated scoring:
 - event_type: {scored.event_type.value}
@@ -816,6 +966,22 @@ Return JSON with these exact fields:
   "ticker_signals": object mapping each affected ticker AND each correlated_moves ticker to its own signal direction. CRITICAL: In macro/geopolitical events, different assets move in OPPOSITE directions due to capital rotation. For example, a Middle East escalation is BULLISH for oil (USO, XOM), gold (GLD), and defense (ITA) but BEARISH for airlines (DAL, UAL) and consumer discretionary. A trade war is BEARISH for importers but BULLISH for domestic competitors. You MUST analyze each ticker independently. Format: {{"TICKER": {{"signal": "BUY" or "SELL" or "HOLD", "confidence": 1-100}}}}. If all tickers move the same direction, they should still each have an entry. Never apply a blanket signal to all tickers without considering how the event specifically impacts each one.
 }}
 
+CRITICAL RULES:
+
+1. "Don't shoot the messenger": If the article is a macroeconomic warning, market commentary, analyst note, research report, or rating change, DO NOT include the ticker of the investment bank or analyst firm that authored the report. Examples:
+- "Goldman Sachs warns of GDP drag" → DO NOT include $GS.
+- "JPMorgan downgrades VMC" → DO NOT include $JPM.
+- "Morgan Stanley expects rate cuts" → DO NOT include $MS.
+
+2. "No hallucinated associations": ONLY include tickers for companies that are explicitly mentioned in the article OR are direct competitors/suppliers/customers of the primary company. Do NOT include tickers just because you associate them with a concept in the article. Examples of what NOT to do:
+- Article about "open-weight AI models" → Do NOT add Hugging Face or any AI platform ticker that isn't mentioned.
+- Article about "cloud computing" → Do NOT add random cloud companies that aren't discussed.
+- A person endorsing a company → Do NOT add that person's company unless the article discusses impact on it.
+
+3. "Respect the tape": The live market data above shows how each stock is ACTUALLY trading right now. If a stock is up significantly (+3% or more) today, do NOT issue a SELL signal on it unless you have extremely high conviction (85%+) — you would be telling someone to short a stock with strong buying momentum, which is extremely dangerous. Conversely, if a stock is down significantly (-3% or more), be cautious about issuing a BUY signal. Price action reflects information you may not have. When the tape contradicts your thesis, default to HOLD or reduce confidence substantially.
+
+Only include the tickers of companies, sectors, commodities, or ETFs that are actually AFFECTED by the news.
+
 Only correct other scoring fields where automated scoring is clearly wrong. Return valid JSON only."""
 
         try:
@@ -825,6 +991,16 @@ Only correct other scoring fields where automated scoring is clearly wrong. Retu
                 max_tokens=500,
                 messages=[{"role": "user", "content": prompt}]
             )
+
+            # Track token usage
+            self._total_calls += 1
+            if hasattr(response, 'usage'):
+                self._total_input_tokens += getattr(response.usage, 'input_tokens', 0)
+                self._total_output_tokens += getattr(response.usage, 'output_tokens', 0)
+
+            # Cache this headline to avoid duplicate calls
+            self._recent_headline_hashes[self._headline_sim_hash(headline)] = time.time()
+
             text = response.content[0].text.strip()
             if text.startswith("```"):
                 text = text.split("```")[1]
@@ -853,12 +1029,23 @@ Only correct other scoring fields where automated scoring is clearly wrong. Retu
             if data.get("time_horizon"):
                 scored.time_horizon = str(data["time_horizon"])
             if isinstance(data.get("correlated_moves"), list):
-                scored.correlated_moves = [str(t) for t in data["correlated_moves"][:4]]
+                validated = []
+                for t in data["correlated_moves"][:6]:
+                    t = str(t).upper()
+                    if self._known_tickers and t not in self._known_tickers:
+                        print(f"  [Claude] Rejected hallucinated ticker: {t}")
+                        continue
+                    validated.append(t)
+                scored.correlated_moves = validated[:4]
             if isinstance(data.get("ticker_signals"), dict):
                 ts = {}
                 for t, v in data["ticker_signals"].items():
+                    t = str(t).upper()
+                    if self._known_tickers and t not in self._known_tickers:
+                        print(f"  [Claude] Rejected hallucinated ticker signal: {t}")
+                        continue
                     if isinstance(v, dict) and v.get("signal") in ("BUY", "SELL", "HOLD"):
-                        ts[str(t)] = {
+                        ts[t] = {
                             "signal": v["signal"],
                             "confidence": max(1, min(100, int(v.get("confidence", scored.buy_confidence)))),
                         }
@@ -868,10 +1055,35 @@ Only correct other scoring fields where automated scoring is clearly wrong. Retu
         except Exception as e:
             print(f"  [Claude] Scoring error: {e}")
 
+        # Fix "Missing Main Character": if entity extraction found no primary tickers
+        # but Claude identified tickers in correlated_moves/ticker_signals, promote
+        # the highest-confidence ticker to affected_tickers (primary).
+        if not scored.affected_tickers and scored.correlated_moves:
+            if scored.ticker_signals:
+                # Sort by confidence descending, promote the top ticker
+                ranked = sorted(
+                    scored.ticker_signals.items(),
+                    key=lambda x: x[1].get("confidence", 0),
+                    reverse=True,
+                )
+                if ranked:
+                    primary = ranked[0][0]
+                    scored.affected_tickers = [primary]
+                    # Remove from correlated_moves so it's not listed twice
+                    scored.correlated_moves = [t for t in scored.correlated_moves if t != primary]
+                    print(f"  [Fix] Promoted {primary} from correlated to primary ticker")
+            elif scored.correlated_moves:
+                # No ticker_signals, just promote the first correlated move
+                primary = scored.correlated_moves[0]
+                scored.affected_tickers = [primary]
+                scored.correlated_moves = scored.correlated_moves[1:]
+                print(f"  [Fix] Promoted {primary} from correlated to primary ticker (no signals)")
+
         return scored
 
     async def validate_buy(self, scored: ScoredEvent, corroborating: list[dict]) -> ScoredEvent:
-        """Second Claude call to validate BUY signal using corroborating sources."""
+        """Second Claude call to validate BUY signal using corroborating sources.
+        Uses Haiku for this simple yes/no task — ~20x cheaper than Sonnet."""
         if not self.client or not corroborating:
             return scored
         headlines = "\n".join(f"- [{a['source']}] {a['headline']}" for a in corroborating[:3])
@@ -891,10 +1103,15 @@ Return ONLY JSON:
         try:
             response = await asyncio.to_thread(
                 self.client.messages.create,
-                model="claude-sonnet-4-6",
+                model="claude-haiku-4-5-20251001",  # Haiku: cheaper for simple validation
                 max_tokens=120,
                 messages=[{"role": "user", "content": prompt}]
             )
+            # Track tokens
+            self._total_calls += 1
+            if hasattr(response, 'usage'):
+                self._total_input_tokens += getattr(response.usage, 'input_tokens', 0)
+                self._total_output_tokens += getattr(response.usage, 'output_tokens', 0)
             text = response.content[0].text.strip()
             if text.startswith("```"):
                 text = text.split("```")[1]
@@ -940,7 +1157,7 @@ class StockAvailabilityChecker:
         "CC", "CCI", "CCK", "CCL", "CDNS", "CDW", "CE", "CEG", "CELH", "CF",
         "CFG", "CG", "CGNX", "CHGG", "CHD", "CHDN", "CHKP", "CHRD", "CHRW",
         "CHTR", "CHWY", "CI", "CIEN", "CINF", "CL", "CLF", "CLH", "CLX", "CMA",
-        "CMCSA", "CME", "CMG", "CMI", "CMS", "CNC", "CNP", "COF", "COHR", "COLD",
+        "CMCSA", "CME", "CMG", "CMI", "CMS", "CNC", "CNP", "COF", "COHR", "COLB", "COLD",
         "COMM", "COP", "COST", "COTY", "CPB", "CPRI", "CPRT", "CPT", "CRM",
         "CROX", "CRSP", "CRWD", "CSCO", "CSGP", "CSX", "CTAS", "CTRA", "CTSH",
         "CTVA", "CVE", "CVNA", "CVS", "CVX", "CW", "CWEN", "CZR",
@@ -1067,7 +1284,7 @@ class StockAvailabilityChecker:
         "CG", "CGNX", "CHGG", "CHD", "CHDN", "CHEF", "CHKP", "CHRD", "CHRW",
         "CHTR", "CHWY", "CI", "CIB", "CIEN", "CINF", "CL", "CLF", "CLH", "CLX",
         "CM", "CMA", "CMC", "CMCSA", "CME", "CMG", "CMI", "CMS", "CNC", "CNK",
-        "CNO", "CNP", "COF", "COHR", "COHU", "COKE", "COLM", "COMM", "COO", "COP",
+        "CNO", "CNP", "COF", "COHR", "COHU", "COKE", "COLB", "COLM", "COMM", "COO", "COP",
         "COST", "COTY", "CPB", "CPRI", "CPRT", "CPT", "CRI", "CRK", "CRL", "CRM",
         "CROX", "CRS", "CSCO", "CSIQ", "CSL", "CSX", "CTAS", "CTRA", "CTRE",
         "CTSH", "CTVA", "CVE", "CVS", "CVX", "CW", "CWEN", "CZR",
@@ -1182,12 +1399,17 @@ class StockAvailabilityChecker:
         entry = self._cache.get(ticker)
         return entry is not None and (time.time() - entry["ts"]) < self.PRICE_TTL
 
+    @staticmethod
+    def _yf_symbol(ticker: str) -> str:
+        """Convert ticker to yfinance format. e.g. BRK.B → BRK-B"""
+        return ticker.replace(".", "-")
+
     async def check_tickers(self, tickers: list[str]) -> dict:
         import yfinance as yf
 
         def _fetch_one(ticker: str) -> tuple[str, dict]:
             try:
-                info = yf.Ticker(ticker).fast_info
+                info = yf.Ticker(self._yf_symbol(ticker)).fast_info
                 exchange = getattr(info, 'exchange', '') or ''
                 last_price = getattr(info, 'last_price', None)
                 prev_close = getattr(info, 'previous_close', None)
@@ -1445,7 +1667,7 @@ class SignalOutcomeTracker:
         def _fetch_prices():
             for t in tickers_needed:
                 try:
-                    info = yf.Ticker(t).fast_info
+                    info = yf.Ticker(StockAvailabilityChecker._yf_symbol(t)).fast_info
                     p = getattr(info, "last_price", None)
                     if p:
                         prices[t] = round(p, 2)
@@ -1505,7 +1727,7 @@ class SignalOutcomeTracker:
         # Fetch current price as entry point
         def _get_price():
             try:
-                info = yf.Ticker(ticker).fast_info
+                info = yf.Ticker(StockAvailabilityChecker._yf_symbol(ticker)).fast_info
                 return getattr(info, "last_price", None)
             except Exception:
                 return None
@@ -1646,15 +1868,18 @@ class EventDatabase:
     def count(self) -> int:
         return self.con.execute("SELECT COUNT(*) FROM events").fetchone()[0]
 
-    def get_recent_events(self, limit: int = 100) -> list[dict]:
-        """Get recent events formatted for the frontend (same shape as WS broadcast)."""
+    def get_recent_events(self, limit: int = 100, max_age_seconds: int = 3600) -> list[dict]:
+        """Get recent events formatted for the frontend (same shape as WS broadcast).
+        Only returns events from the last max_age_seconds (default: 1 hour)."""
+        import time
+        cutoff = time.time() - max_age_seconds
         cur = self.con.execute(
             "SELECT event_id, timestamp, headline, source, source_tier, "
             "event_type, direction, sentiment, impact_score, urgency, brief, "
             "buy_signal, buy_confidence, affected_tickers, affected_sectors, "
             "affected_etfs, stock_availability, latency_ms "
-            "FROM events ORDER BY timestamp DESC LIMIT ?",
-            (limit,)
+            "FROM events WHERE timestamp >= ? ORDER BY timestamp DESC LIMIT ?",
+            (cutoff, limit,)
         )
         results = []
         for row in cur.fetchall():
@@ -1991,6 +2216,27 @@ class NYSEReferenceDB:
                      "sub_sector": "QSR", "beta_30d": 0.6},
             "SBUX": {"name": "Starbucks", "sector": "Consumer Disc.", "mcap": "large", "etf": "XLY",
                      "sub_sector": "QSR/Coffee", "beta_30d": 0.9},
+            # ── Consumer Disc. — Specialty Retail / Beauty ────────────────
+            "ULTA": {"name": "Ulta Beauty", "sector": "Consumer Disc.", "mcap": "large", "etf": "XLY",
+                     "sub_sector": "Specialty Beauty Retail", "beta_30d": 1.3},
+            "ELF":  {"name": "e.l.f. Beauty", "sector": "Consumer Disc.", "mcap": "mid", "etf": "XLY",
+                     "sub_sector": "Specialty Beauty", "beta_30d": 1.8},
+            "COTY": {"name": "Coty", "sector": "Consumer Staples", "mcap": "mid", "etf": "XLP",
+                     "sub_sector": "Beauty/Personal Care", "beta_30d": 1.4},
+            "EL":   {"name": "Estée Lauder", "sector": "Consumer Staples", "mcap": "large", "etf": "XLP",
+                     "sub_sector": "Beauty/Personal Care", "beta_30d": 1.2},
+            "TGT":  {"name": "Target", "sector": "Consumer Disc.", "mcap": "large", "etf": "XLY",
+                     "sub_sector": "Big Box Retail", "beta_30d": 1.0},
+            "LOW":  {"name": "Lowe's", "sector": "Consumer Disc.", "mcap": "large", "etf": "XLY",
+                     "sub_sector": "Home Improvement", "beta_30d": 1.0},
+            "TJX":  {"name": "TJX Companies", "sector": "Consumer Disc.", "mcap": "large", "etf": "XLY",
+                     "sub_sector": "Off-Price Retail", "beta_30d": 0.9},
+            "ROST": {"name": "Ross Stores", "sector": "Consumer Disc.", "mcap": "large", "etf": "XLY",
+                     "sub_sector": "Off-Price Retail", "beta_30d": 0.9},
+            "DG":   {"name": "Dollar General", "sector": "Consumer Disc.", "mcap": "large", "etf": "XLY",
+                     "sub_sector": "Discount Retail", "beta_30d": 0.8},
+            "DLTR": {"name": "Dollar Tree", "sector": "Consumer Disc.", "mcap": "mid", "etf": "XLY",
+                     "sub_sector": "Discount Retail", "beta_30d": 1.0},
             "DIS":  {"name": "Walt Disney", "sector": "Communication", "mcap": "large", "etf": "XLC",
                      "sub_sector": "Media/Entertainment", "beta_30d": 1.1},
 
@@ -2197,6 +2443,15 @@ class NYSEReferenceDB:
             "visa": "V",
             "mastercard": "MA",
             "blackrock": "BLK", "larry fink": "BLK",
+            # Regional Banks
+            "columbia banking": "COLB", "columbia banking system": "COLB",
+            "zions": "ZION", "zions bancorporation": "ZION", "zions bancorp": "ZION",
+            "regions financial": "RF", "regions bank": "RF",
+            "keycorp": "KEY", "key bank": "KEY", "keybank": "KEY",
+            "comerica": "CMA",
+            "first republic": "FRC",
+            "western alliance": "WAL",
+            "east west bancorp": "EWBC",
             # Healthcare
             "johnson & johnson": "JNJ", "j&j": "JNJ",
             "pfizer": "PFE",
@@ -2219,7 +2474,10 @@ class NYSEReferenceDB:
             "oracle": "ORCL",
             "servicenow": "NOW",
             "palantir": "PLTR",
-            # Industrials
+            # Industrials / Transport
+            "freightcar america": "RAIL", "freightcar": "RAIL",
+            "trinity industries": "TRN", "trinity": "TRN",
+            "greenbrier": "GBX", "greenbrier companies": "GBX",
             "caterpillar": "CAT",
             "deere": "DE", "john deere": "DE",
             "ge": "GE", "ge aerospace": "GE",
@@ -2235,9 +2493,20 @@ class NYSEReferenceDB:
             "costco": "COST",
             "nike": "NKE",
             "home depot": "HD",
+            "lowe's": "LOW", "lowes": "LOW",
             "mcdonald's": "MCD", "mcdonalds": "MCD",
             "starbucks": "SBUX",
             "disney": "DIS", "walt disney": "DIS",
+            "target": "TGT",
+            "tjx": "TJX", "tj maxx": "TJX", "t.j. maxx": "TJX", "marshalls": "TJX",
+            "ross stores": "ROST", "ross": "ROST",
+            "dollar general": "DG",
+            "dollar tree": "DLTR",
+            # Beauty / Personal Care
+            "ulta": "ULTA", "ulta beauty": "ULTA",
+            "elf beauty": "ELF", "e.l.f.": "ELF", "e.l.f. beauty": "ELF",
+            "coty": "COTY",
+            "estee lauder": "EL", "estée lauder": "EL", "lauder": "EL",
             # Utilities
             "duke energy": "DUK",
             "southern company": "SO",
@@ -2320,6 +2589,7 @@ class NYSEReferenceDB:
 
         # ── SECTOR → ETF CONTAGION MAP ─────────────────────────────────────
         self.sector_correlations: dict[str, list[str]] = {
+            "Crypto":            ["IBIT", "BITO", "WGMI", "BITQ"],
             "Semiconductors":    ["SMH", "SOXX", "XSD", "PSI"],
             "Energy":            ["XLE", "XOP", "OIH", "AMLP", "TAN"],
             "Financials":        ["XLF", "KRE", "KBE", "IAI"],
@@ -2399,6 +2669,21 @@ class NYSEReferenceDB:
                 "suppliers": [],
                 "customers": [],
                 "peers": ["NEM", "NUE"],
+            },
+            "ULTA": {
+                "suppliers": ["EL", "COTY", "ELF"],
+                "customers": [],
+                "peers": ["ELF", "COTY", "EL", "TGT"],
+            },
+            "ELF": {
+                "suppliers": [],
+                "customers": ["ULTA", "TGT", "WMT"],
+                "peers": ["COTY", "EL"],
+            },
+            "TGT": {
+                "suppliers": ["PG", "KO"],
+                "customers": [],
+                "peers": ["WMT", "COST", "DG"],
             },
         }
 
@@ -2501,6 +2786,26 @@ class EntityExtractor:
             r'|starts?\s+coverage|begins?\s+coverage)\s',
             re.IGNORECASE,
         ),
+        # "Goldman warns of..." / "Jack Dorsey praises..." / "Morgan Stanley expects..."
+        # Person/firm is the COMMENTATOR or ENDORSER, not the subject of the news
+        re.compile(
+            r'(?P<actor>.+?)\s+(?:warns?|says?|expects?|predicts?|forecasts?'
+            r'|sees?\b|projects?|estimates?|cautions?|flags?|notes?'
+            r'|believes?|analysts?\s+at|strategists?\s+at|economists?\s+at'
+            r'|research\s+from|according\s+to|report\s+from|reaffirms?'
+            r'|highlights?|signals?|recommends?'
+            r'|praises?|endorses?|backs?|supports?|touts?|applauds?'
+            r'|criticizes?|slams?|blasts?|questions?|doubts?)\s',
+            re.IGNORECASE,
+        ),
+        # "...warns Goldman" / "...says JPMorgan" / "...praises Jack Dorsey"
+        re.compile(
+            r'(?:warns?|says?|expects?|predicts?|forecasts?|sees?'
+            r'|projects?|estimates?|cautions?|flags?|notes?'
+            r'|believes?|according\s+to|report\s+(?:from|by)'
+            r'|praises?|endorses?|backs?|supports?|touts?)\s+(?P<actor>.+?)(?:\s*[,;.\-—]|$)',
+            re.IGNORECASE,
+        ),
     ]
 
     def __init__(self, reference_db: NYSEReferenceDB):
@@ -2526,8 +2831,14 @@ class EntityExtractor:
                 )
             else:
                 self._alias_patterns[alias] = (None, ticker)  # plain substring
-        # Sector keywords for macro events that don't mention specific companies
+        # Sector keywords for macro events that don't mention specific companies.
+        # Order matters: Crypto is checked first so "bitcoin" articles don't fall
+        # through to Materials just because "gold" appears in comparison text.
         self.sector_keywords: dict[str, list[str]] = {
+            "Crypto": ["bitcoin", "btc", "ethereum", "eth ", "crypto", "cryptocurrency",
+                       "blockchain", "defi", "stablecoin", "digital asset", "microstrategy",
+                       "bitcoin etf", "spot etf", "crypto regulation", "digital currency",
+                       "altcoin", "memecoin", "nft"],
             "Semiconductors": ["chip", "semiconductor", "wafer", "fab ", "foundry", "gpu", "ai chip",
                                "hbm", "memory chip", "processor", "lithography"],
             "Energy": ["oil", "crude", "natural gas", "lng", "opec", "drilling", "refinery",
@@ -2542,8 +2853,9 @@ class EntityExtractor:
                           "wind farm", "data center power", "grid reliability"],
             "REITs": ["commercial real estate", "office vacancy", "data center",
                       "warehouse", "industrial real estate", "cell tower"],
-            "Materials": ["copper", "gold", "steel", "aluminum", "lithium", "rare earth",
-                          "mining", "commodity", "iron ore"],
+            "Materials": ["copper", "gold price", "gold miner", "steel", "aluminum", "lithium",
+                          "rare earth", "mining", "commodity", "iron ore", "gold futures",
+                          "precious metal"],
         }
 
     def extract(self, headline: str, body: str = "") -> dict:
@@ -2572,35 +2884,30 @@ class EntityExtractor:
                 if alias in text_lower:
                     found_tickers.add(ticker)
 
-        # Pass 2b: Analyst role detection — remove actor (analyst firm) from
-        # affected_tickers so signals target the right stock.
-        # e.g. "VMC Downgraded by JPMorgan" → JPM is the analyst, not the target.
+        # Pass 2b: Analyst role detection — identify actor (analyst firm) tickers.
+        # These will be removed AFTER all passes so that sector/supply-chain tickers
+        # are available as targets. This fixes cases like "Goldman warns of GDP drag"
+        # where GS is the only ticker at this point but oil/macro tickers come later.
         analyst_tickers = set()
-        if len(found_tickers) > 1:
-            headline_lower = headline.lower()
-            for pattern in self.ANALYST_ACTION_PATTERNS:
-                m = pattern.search(headline_lower)
-                if m:
-                    actor_text = m.group("actor").strip()
-                    # Resolve the actor text to a ticker via aliases
-                    for alias, (apatt, aticker) in self._alias_patterns.items():
-                        if aticker not in found_tickers:
-                            continue
-                        if apatt is not None:
-                            if apatt.search(actor_text):
-                                analyst_tickers.add(aticker)
-                        else:
-                            if alias in actor_text:
-                                analyst_tickers.add(aticker)
-                    # Also check explicit ticker symbols in the actor text
-                    for tmatch in self.ticker_pattern.finditer(actor_text):
-                        t = tmatch.group(1) or tmatch.group(2) or tmatch.group(3)
-                        if t in found_tickers:
-                            analyst_tickers.add(t)
-                    break  # first matching pattern is enough
-            # Only remove analyst tickers if at least one target remains
-            if analyst_tickers and (found_tickers - analyst_tickers):
-                found_tickers -= analyst_tickers
+        headline_lower = headline.lower()
+        for pattern in self.ANALYST_ACTION_PATTERNS:
+            m = pattern.search(headline_lower)
+            if m:
+                actor_text = m.group("actor").strip()
+                # Resolve the actor text to a ticker via aliases
+                for alias, (apatt, aticker) in self._alias_patterns.items():
+                    if apatt is not None:
+                        if apatt.search(actor_text):
+                            analyst_tickers.add(aticker)
+                    else:
+                        if alias in actor_text:
+                            analyst_tickers.add(aticker)
+                # Also check explicit ticker symbols in the actor text
+                for tmatch in self.ticker_pattern.finditer(actor_text):
+                    t = tmatch.group(1) or tmatch.group(2) or tmatch.group(3)
+                    if t in self._all_known_tickers:
+                        analyst_tickers.add(t)
+                break  # first matching pattern is enough
 
         # Pass 3: Sector keyword detection (for macro / broad events)
         detected_sectors_from_keywords = set()
@@ -2610,8 +2917,10 @@ class EntityExtractor:
                     detected_sectors_from_keywords.add(sector)
                     break
 
-        # If no specific tickers found but sector detected, flag sector-wide
-        if not found_tickers and detected_sectors_from_keywords:
+        # If no real target tickers found (empty or only analyst messengers),
+        # use sector keywords to flag sector-wide impact
+        real_tickers = found_tickers - analyst_tickers
+        if not real_tickers and detected_sectors_from_keywords:
             for sector in detected_sectors_from_keywords:
                 found_sectors.add(sector)
                 found_etfs.update(self.db.sector_correlations.get(sector, []))
@@ -2624,8 +2933,11 @@ class EntityExtractor:
                     found_supply_chain.add(f"{t} ({role[:-1]})")  # "TSM (supplier)"
                     found_contagion.add(t)
 
-        # Pass 5: Sector & ETF propagation from found tickers
-        for ticker in found_tickers:
+        # Pass 5: Sector & ETF propagation from real target tickers only.
+        # Exclude analyst/messenger tickers so their sectors don't pollute ETFs.
+        # e.g. Jack Dorsey → SQ → Financials ETFs should NOT appear on an NVDA article.
+        target_tickers = found_tickers - analyst_tickers
+        for ticker in target_tickers:
             info = self.db.tickers.get(ticker, {})
             if "sector" in info:
                 found_sectors.add(info["sector"])
@@ -2633,6 +2945,16 @@ class EntityExtractor:
 
         # Also add sectors from keywords even if we have tickers
         found_sectors.update(detected_sectors_from_keywords)
+
+        # Final pass: Remove analyst/messenger tickers identified in Pass 2b.
+        # Always remove the messenger — even if it's the only ticker found.
+        # The "Missing Main Character" fix downstream will promote the correct
+        # ticker from Claude's correlated_moves/ticker_signals.
+        # e.g. "Goldman warns of GDP drag" → GS removed, Claude provides USO/XOM/SPY.
+        if analyst_tickers:
+            found_tickers -= analyst_tickers
+            found_supply_chain -= analyst_tickers
+            found_contagion -= analyst_tickers
 
         return {
             "tickers": sorted(found_tickers),
@@ -3379,7 +3701,7 @@ class NYSEImpactScreener:
         self.entity_extractor = EntityExtractor(self.reference_db)
         self.scoring_engine = MarketImpactScoringEngine(self.reference_db)
         self.alert_dispatcher = AlertDispatcher()
-        self.claude_scorer = ClaudeScorer()
+        self.claude_scorer = ClaudeScorer(known_tickers=self.entity_extractor._all_known_tickers)
         self.availability_checker = StockAvailabilityChecker()
         self.db = EventDatabase()
         self.signal_tracker = SignalOutcomeTracker(self.db)
@@ -3390,9 +3712,11 @@ class NYSEImpactScreener:
         self.sector_heat: dict[str, list[int]] = defaultdict(list)
 
     def ingest_raw(self, raw: dict) -> RawNewsEvent:
+        # Use original publication timestamp if available, fallback to now
+        ts = raw.get("pub_ts") or time.time()
         return RawNewsEvent(
             event_id=str(uuid.uuid4())[:8],
-            timestamp=time.time(),
+            timestamp=ts,
             source=raw["source"],
             source_tier=raw["source_tier"],
             headline=raw["headline"],
@@ -3445,6 +3769,10 @@ class NYSEImpactScreener:
                 scored.stock_availability.update(extra_avail)
                 for t, v in extra_avail.items():
                     scored.price_data[t] = {"price": v.get("price"), "change_pct": v.get("change_pct")}
+
+            # ── POST-CLAUDE FILTER — drop if Claude re-scored below threshold ──
+            if scored.impact_score < 40:
+                return None
 
         self.processed_count += 1
         self.db.insert(scored)
@@ -3513,6 +3841,12 @@ class NYSEImpactScreener:
         print(f"  {c['WHITE']}{'═' * 76}{c['RESET']}")
         print(f"    Events processed:  {self.processed_count}")
         print(f"    Alerts triggered:  {self.alert_count}")
+
+        # Claude API usage stats
+        usage = self.claude_scorer.usage_stats
+        print(f"    Claude API calls:  {usage['total_calls']}  (skipped: {usage['calls_skipped']})")
+        print(f"    Tokens used:       {usage['input_tokens']:,} in / {usage['output_tokens']:,} out")
+        print(f"    Estimated cost:    ${usage['estimated_cost_usd']:.4f}")
 
         if results:
             scores = [r.impact_score for r in results]
