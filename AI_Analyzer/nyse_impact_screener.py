@@ -333,12 +333,15 @@ class RSSFeed:
                     uid = entry.get("id") or entry.get("link") or entry.get("title")
                     if not uid or uid in self._seen_ids:
                         continue
+                    # ── 60-Minute Hard Stop: only process articles published within last hour ──
+                    # Rule 1: Articles older than 60 minutes are discarded immediately
+                    # Rule 2: Use the ORIGINAL publication timestamp, not scrape/index time
+                    # Rule 3: If no valid publication date can be determined, discard the article
+                    pub_ts = None
                     published = entry.get("published") or entry.get("updated")
                     if published:
                         try:
                             pub_ts = email.utils.parsedate_to_datetime(published).timestamp()
-                            if pub_ts < cutoff:
-                                continue
                         except Exception:
                             # Try feedparser's parsed time tuple as fallback
                             pub_struct = entry.get("published_parsed") or entry.get("updated_parsed")
@@ -346,13 +349,27 @@ class RSSFeed:
                                 try:
                                     import calendar
                                     pub_ts = calendar.timegm(pub_struct)
-                                    if pub_ts < cutoff:
-                                        continue
                                 except Exception:
-                                    pass  # can't parse date → allow through, dedup will handle it
-                            # else: has date string but unparseable → allow through
-                    # No publish date → allow through (many feeds omit dates)
-                    # Deduplication via _seen_ids prevents re-processing on restart
+                                    pass
+                    else:
+                        # No date string — try parsed structs directly
+                        pub_struct = entry.get("published_parsed") or entry.get("updated_parsed")
+                        if pub_struct:
+                            try:
+                                import calendar
+                                pub_ts = calendar.timegm(pub_struct)
+                            except Exception:
+                                pass
+
+                    # STRICT: No valid publication timestamp → skip entirely
+                    if pub_ts is None:
+                        continue
+                    # STRICT: Article older than 60 minutes → discard
+                    if pub_ts < cutoff:
+                        continue
+                    # Guard against future timestamps (clock skew) — clamp to now
+                    if pub_ts > time.time() + 300:  # allow 5min tolerance
+                        continue
                     raw_title = entry.get("title", "").strip()
                     if not raw_title:
                         continue
@@ -370,6 +387,7 @@ class RSSFeed:
                         "headline": headline,
                         "body": body,
                         "link": entry.get("link", ""),
+                        "pub_ts": pub_ts,  # original publication timestamp
                     })
             except Exception as e:
                 print(f"  [RSS] Failed to fetch {source['name']}: {e}")
@@ -1135,7 +1153,7 @@ class StockAvailabilityChecker:
         "CC", "CCI", "CCK", "CCL", "CDNS", "CDW", "CE", "CEG", "CELH", "CF",
         "CFG", "CG", "CGNX", "CHGG", "CHD", "CHDN", "CHKP", "CHRD", "CHRW",
         "CHTR", "CHWY", "CI", "CIEN", "CINF", "CL", "CLF", "CLH", "CLX", "CMA",
-        "CMCSA", "CME", "CMG", "CMI", "CMS", "CNC", "CNP", "COF", "COHR", "COLD",
+        "CMCSA", "CME", "CMG", "CMI", "CMS", "CNC", "CNP", "COF", "COHR", "COLB", "COLD",
         "COMM", "COP", "COST", "COTY", "CPB", "CPRI", "CPRT", "CPT", "CRM",
         "CROX", "CRSP", "CRWD", "CSCO", "CSGP", "CSX", "CTAS", "CTRA", "CTSH",
         "CTVA", "CVE", "CVNA", "CVS", "CVX", "CW", "CWEN", "CZR",
@@ -1262,7 +1280,7 @@ class StockAvailabilityChecker:
         "CG", "CGNX", "CHGG", "CHD", "CHDN", "CHEF", "CHKP", "CHRD", "CHRW",
         "CHTR", "CHWY", "CI", "CIB", "CIEN", "CINF", "CL", "CLF", "CLH", "CLX",
         "CM", "CMA", "CMC", "CMCSA", "CME", "CMG", "CMI", "CMS", "CNC", "CNK",
-        "CNO", "CNP", "COF", "COHR", "COHU", "COKE", "COLM", "COMM", "COO", "COP",
+        "CNO", "CNP", "COF", "COHR", "COHU", "COKE", "COLB", "COLM", "COMM", "COO", "COP",
         "COST", "COTY", "CPB", "CPRI", "CPRT", "CPT", "CRI", "CRK", "CRL", "CRM",
         "CROX", "CRS", "CSCO", "CSIQ", "CSL", "CSX", "CTAS", "CTRA", "CTRE",
         "CTSH", "CTVA", "CVE", "CVS", "CVX", "CW", "CWEN", "CZR",
@@ -2421,6 +2439,15 @@ class NYSEReferenceDB:
             "visa": "V",
             "mastercard": "MA",
             "blackrock": "BLK", "larry fink": "BLK",
+            # Regional Banks
+            "columbia banking": "COLB", "columbia banking system": "COLB",
+            "zions": "ZION", "zions bancorporation": "ZION", "zions bancorp": "ZION",
+            "regions financial": "RF", "regions bank": "RF",
+            "keycorp": "KEY", "key bank": "KEY", "keybank": "KEY",
+            "comerica": "CMA",
+            "first republic": "FRC",
+            "western alliance": "WAL",
+            "east west bancorp": "EWBC",
             # Healthcare
             "johnson & johnson": "JNJ", "j&j": "JNJ",
             "pfizer": "PFE",
@@ -3681,9 +3708,11 @@ class NYSEImpactScreener:
         self.sector_heat: dict[str, list[int]] = defaultdict(list)
 
     def ingest_raw(self, raw: dict) -> RawNewsEvent:
+        # Use original publication timestamp if available, fallback to now
+        ts = raw.get("pub_ts") or time.time()
         return RawNewsEvent(
             event_id=str(uuid.uuid4())[:8],
-            timestamp=time.time(),
+            timestamp=ts,
             source=raw["source"],
             source_tier=raw["source_tier"],
             headline=raw["headline"],
