@@ -1,0 +1,559 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   Expanded Event Panel Styles
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Panel Container ─────────────────────────────────────────────────────── */
+
+.ep-panel {
+  margin-top: 14px;
+  border-top: 2px solid #0066ff;
+  padding-top: 16px;
+  animation: ep-slideDown 0.3s ease;
+}
+
+@keyframes ep-slideDown {
+  from { opacity: 0; max-height: 0; transform: translateY(-10px); }
+  to   { opacity: 1; max-height: 5000px; transform: translateY(0); }
+}
+
+/* ── Close Bar ───────────────────────────────────────────────────────────── */
+
+.ep-close-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.ep-close-hint {
+  font-size: 11px;
+  font-weight: 700;
+  color: #0066ff;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.ep-close-btn {
+  padding: 5px 14px;
+  border-radius: 8px;
+  border: 1px solid #e5e5ea;
+  background: #ffffff;
+  color: #636366;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.ep-close-btn:hover {
+  background: #fdeaea;
+  color: #d63031;
+  border-color: #f5c6c6;
+}
+
+/* ── Sections ────────────────────────────────────────────────────────────── */
+
+.ep-section {
+  margin-bottom: 18px;
+}
+
+.ep-section-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #3c3c43;
+  margin-bottom: 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #f0f0f5;
+}
+
+/* ── Chart Tabs ──────────────────────────────────────────────────────────── */
+
+.ep-chart-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.ep-chart-tab {
+  padding: 5px 14px;
+  border: none;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  font-family: 'JetBrains Mono', monospace;
+  cursor: pointer;
+  background: #f0f0f5;
+  color: #8e8e93;
+  transition: all 0.15s ease;
+}
+
+.ep-chart-tab.active {
+  background: #0066ff;
+  color: #ffffff;
+}
+
+.ep-chart-tab:hover:not(.active) {
+  background: #e5e5ea;
+}
+
+/* ── Chart Section ───────────────────────────────────────────────────────── */
+
+.ep-chart-section {
+  background: #fafafa;
+  border-radius: 12px;
+  padding: 16px;
+  border: 1px solid #f0f0f5;
+}
+
+.ep-chart-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.ep-chart-ticker-info {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.ep-chart-ticker {
+  font-size: 18px;
+  font-weight: 800;
+  color: #0066ff;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.ep-chart-price {
+  font-size: 20px;
+  font-weight: 800;
+  color: #1c1c1e;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.ep-chart-change {
+  font-size: 14px;
+  font-weight: 700;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.ep-chart-change.up { color: #1a9d4a; }
+.ep-chart-change.down { color: #d63031; }
+
+.ep-chart-mcap {
+  font-size: 11px;
+  color: #aeaeb2;
+  font-weight: 500;
+}
+
+/* ── Period Selector ─────────────────────────────────────────────────────── */
+
+.ep-period-selector {
+  display: flex;
+  gap: 2px;
+  background: #f0f0f5;
+  padding: 3px;
+  border-radius: 8px;
+}
+
+.ep-period-btn {
+  padding: 5px 10px;
+  border: none;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  background: transparent;
+  color: #8e8e93;
+  transition: all 0.15s ease;
+}
+
+.ep-period-btn.active {
+  background: #ffffff;
+  color: #0066ff;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+
+.ep-period-btn:hover:not(.active) {
+  color: #636366;
+}
+
+/* ── Chart Container ─────────────────────────────────────────────────────── */
+
+.ep-chart-container {
+  min-height: 280px;
+}
+
+.ep-chart-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 280px;
+}
+
+.ep-chart-spinner {
+  width: 28px;
+  height: 28px;
+  border: 3px solid #f0f0f5;
+  border-top-color: #0066ff;
+  border-radius: 50%;
+  animation: bt-spin 0.8s linear infinite;
+}
+
+.ep-chart-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 280px;
+  color: #c7c7cc;
+  font-size: 13px;
+}
+
+/* ── Chart Stats ─────────────────────────────────────────────────────────── */
+
+.ep-chart-stats {
+  display: flex;
+  gap: 16px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid #f0f0f5;
+  flex-wrap: wrap;
+}
+
+.ep-chart-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ep-chart-stat-label {
+  font-size: 10px;
+  color: #aeaeb2;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.ep-chart-stat-value {
+  font-size: 14px;
+  font-weight: 700;
+  font-family: 'JetBrains Mono', monospace;
+  color: #1c1c1e;
+}
+
+/* ── Chart Tooltip ───────────────────────────────────────────────────────── */
+
+.ep-chart-tooltip {
+  background: rgba(28, 28, 30, 0.95);
+  backdrop-filter: blur(12px);
+  border-radius: 10px;
+  padding: 10px 14px;
+  min-width: 150px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+}
+
+.ep-chart-tooltip-date {
+  font-size: 11px;
+  font-weight: 600;
+  color: #aeaeb2;
+  margin-bottom: 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid rgba(255,255,255,0.1);
+}
+
+.ep-chart-tooltip-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: 12px;
+  padding: 1px 0;
+}
+
+.ep-chart-tooltip-row span:first-child {
+  color: #aeaeb2;
+}
+
+.ep-chart-tooltip-row span:last-child {
+  color: #ffffff;
+  font-weight: 600;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* ── Signals Table ───────────────────────────────────────────────────────── */
+
+.ep-table-wrapper {
+  overflow-x: auto;
+}
+
+.ep-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.ep-table thead th {
+  text-align: left;
+  padding: 8px 6px;
+  font-weight: 700;
+  font-size: 10px;
+  color: #8e8e93;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-bottom: 2px solid #f0f0f5;
+  white-space: nowrap;
+}
+
+.ep-table tbody tr {
+  border-bottom: 1px solid #f7f7f7;
+  transition: background 0.1s ease;
+}
+
+.ep-table tbody tr:hover {
+  background: #fafafa;
+}
+
+.ep-table tbody tr.correlated {
+  opacity: 0.75;
+}
+
+.ep-table td {
+  padding: 8px 6px;
+  white-space: nowrap;
+}
+
+.ep-td-ticker {
+  font-weight: 700;
+  color: #0066ff;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+}
+
+.ep-correlated-tag {
+  font-size: 9px;
+  color: #aeaeb2;
+  background: #f0f0f5;
+  padding: 1px 5px;
+  border-radius: 4px;
+  margin-left: 4px;
+  font-weight: 600;
+}
+
+.ep-td-mono {
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 600;
+}
+
+.ep-td-mono.up { color: #1a9d4a; }
+.ep-td-mono.down { color: #d63031; }
+
+.ep-signal-pill {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.ep-signal-pill.buy { background: #e8f9ef; color: #1a9d4a; }
+.ep-signal-pill.sell { background: #fdeaea; color: #d63031; }
+.ep-signal-pill.hold { background: #f0f0f5; color: #8e8e93; }
+
+/* RSI badge */
+.ep-rsi-badge {
+  font-size: 11px;
+  font-weight: 700;
+  font-family: 'JetBrains Mono', monospace;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.ep-rsi-badge.overbought { background: #fdeaea; color: #d63031; }
+.ep-rsi-badge.oversold { background: #e8f9ef; color: #1a9d4a; }
+.ep-rsi-badge.bullish { background: #fff3e0; color: #f5a623; }
+.ep-rsi-badge.bearish { background: #eef4ff; color: #0066ff; }
+.ep-rsi-badge.neutral { background: #f0f0f5; color: #8e8e93; }
+
+/* MACD badge */
+.ep-macd-badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.ep-macd-badge.bullish { background: #e8f9ef; color: #1a9d4a; }
+.ep-macd-badge.bearish { background: #fdeaea; color: #d63031; }
+
+.ep-macd-neutral {
+  font-size: 11px;
+  font-family: 'JetBrains Mono', monospace;
+  color: #8e8e93;
+}
+
+/* Volume spike */
+.ep-vol-spike {
+  color: #d63031;
+  font-weight: 700;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* Tech signal badge */
+.ep-tech-badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.ep-tech-badge.bullish { background: #e8f9ef; color: #1a9d4a; }
+.ep-tech-badge.bearish { background: #fdeaea; color: #d63031; }
+.ep-tech-badge.neutral { background: #f0f0f5; color: #8e8e93; }
+
+/* Broker availability */
+.ep-broker-yes { color: #1a9d4a; font-weight: 700; }
+.ep-broker-no { color: #d1d1d6; }
+
+/* ── Supply Chain & Contagion ────────────────────────────────────────────── */
+
+.ep-contagion-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ep-contagion-block {
+  padding: 10px 14px;
+  background: #fafafa;
+  border-radius: 10px;
+  border: 1px solid #f0f0f5;
+}
+
+.ep-contagion-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 700;
+  color: #8e8e93;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin-bottom: 8px;
+}
+
+.ep-contagion-tickers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ep-contagion-ticker {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  font-family: 'JetBrains Mono', monospace;
+  background: #f0f0f5;
+  color: #3c3c43;
+}
+
+.ep-contagion-ticker.buy { background: #e8f9ef; color: #1a9d4a; }
+.ep-contagion-ticker.sell { background: #fdeaea; color: #d63031; }
+.ep-contagion-ticker.contagion { background: #fff3e0; color: #f5a623; border: 1px solid #f5a62333; }
+
+.ep-contagion-signal {
+  font-size: 10px;
+  opacity: 0.8;
+}
+
+/* ── Technical Indicators Grid ───────────────────────────────────────────── */
+
+.ep-tech-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 10px;
+}
+
+.ep-tech-card {
+  background: #fafafa;
+  border-radius: 10px;
+  padding: 10px;
+  border: 1px solid #f0f0f5;
+}
+
+.ep-tech-card-header {
+  font-size: 14px;
+  font-weight: 800;
+  color: #0066ff;
+  font-family: 'JetBrains Mono', monospace;
+  margin-bottom: 4px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid #f0f0f5;
+}
+
+/* reset nested overlay background inside card */
+.ep-tech-card .ti-overlay {
+  margin-top: 0;
+  padding: 0;
+  background: transparent;
+  border: none;
+}
+
+/* ── Metadata Grid ───────────────────────────────────────────────────────── */
+
+.ep-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 8px;
+  background: #fafafa;
+  border-radius: 10px;
+  padding: 14px;
+  border: 1px solid #f0f0f5;
+}
+
+.ep-meta-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ep-meta-item.full {
+  grid-column: 1 / -1;
+}
+
+.ep-meta-label {
+  font-size: 10px;
+  font-weight: 700;
+  color: #aeaeb2;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.ep-meta-value {
+  font-size: 13px;
+  font-weight: 600;
+  color: #3c3c43;
+}
+
+.ep-meta-value.mono {
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.ep-meta-value.up { color: #1a9d4a; }
+.ep-meta-value.down { color: #d63031; }
+
+.ep-meta-link {
+  font-size: 12px;
+  color: #0066ff;
+  text-decoration: none;
+  word-break: break-all;
+}
+
+.ep-meta-link:hover {
+  text-decoration: underline;
+}
