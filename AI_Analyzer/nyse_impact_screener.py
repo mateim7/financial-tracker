@@ -229,7 +229,6 @@ async def tech_indicators_handler(request):
 
 async def start_http_server(db: "EventDatabase", tech_indicators=None):
     from backtesting_api import setup_backtesting_routes
-    from stock_chart_api import setup_chart_routes
 
     app = aiohttp_web.Application()
     app["db"] = db
@@ -241,7 +240,6 @@ async def start_http_server(db: "EventDatabase", tech_indicators=None):
     app.router.add_get("/api/events", events_handler)
     app.router.add_get("/api/tech-indicators", tech_indicators_handler)
     setup_backtesting_routes(app)
-    setup_chart_routes(app)
     runner = aiohttp_web.AppRunner(app)
     await runner.setup()
     await aiohttp_web.TCPSite(runner, "0.0.0.0", 8766).start()

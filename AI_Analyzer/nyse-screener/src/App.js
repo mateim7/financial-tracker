@@ -2,7 +2,6 @@ import "./App.css";
 import { useState, useEffect, useRef } from "react";
 import Backtesting from "./Backtesting";
 import TechnicalIndicatorsOverlay, { TechMiniBadge } from "./TechnicalIndicators";
-import ExpandedEventPanel from "./ExpandedEventPanel";
 
 /* ── helpers ─────────────────────────────────────────────────────────────── */
 function getSeverity(score) {
@@ -127,7 +126,6 @@ function EventCard({ event, isNew, trackedPairs, onTrack, onUntrack }) {
   const severity = getSeverity(event.score);
   const [timeAgo, setTimeAgo] = useState(getTimeAgo(event.ts));
   const [hovered, setHovered] = useState(false);
-  const [expanded, setExpanded] = useState(false);
   useEffect(() => { const i = setInterval(() => setTimeAgo(getTimeAgo(event.ts)), 5000); return () => clearInterval(i); }, [event.ts]);
 
   const hasUrl = Boolean(event.url);
@@ -413,27 +411,12 @@ function EventCard({ event, isNew, trackedPairs, onTrack, onUntrack }) {
       </div>
 
       {/* technical indicators overlay — detailed view for primary tickers */}
-      {!expanded && event.technical_data && event.tickers && event.tickers.length > 0 && (() => {
+      {event.technical_data && event.tickers && event.tickers.length > 0 && (() => {
         const firstTicker = event.tickers[0];
         const td = event.technical_data[firstTicker];
         if (!td || !td.available) return null;
         return <TechnicalIndicatorsOverlay data={td} />;
       })()}
-
-      {/* expand / collapse button */}
-      <div style={{ display: "flex", justifyContent: "center", marginTop: 10 }}>
-        <button onClick={() => setExpanded(e => !e)} style={{
-          padding: "6px 20px", borderRadius: 20, border: "1px solid #e5e5ea",
-          background: expanded ? "#0066ff" : "#fafafa", color: expanded ? "#ffffff" : "#8e8e93",
-          fontSize: 11, fontWeight: 600, cursor: "pointer", transition: "all 0.2s ease",
-          display: "flex", alignItems: "center", gap: 6,
-        }}>
-          {expanded ? "▲ Collapse" : "▼ Expand Details"}
-        </button>
-      </div>
-
-      {/* expanded panel */}
-      {expanded && <ExpandedEventPanel event={event} onClose={() => setExpanded(false)} />}
     </div>
   );
 }
