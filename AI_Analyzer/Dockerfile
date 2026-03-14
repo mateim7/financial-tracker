@@ -6,6 +6,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY nyse_impact_screener.py .
+COPY backtesting_api.py .
 
 EXPOSE 8765 8766
 

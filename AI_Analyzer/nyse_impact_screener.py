@@ -199,16 +199,20 @@ async def events_handler(request):
 
 
 async def start_http_server(db: "EventDatabase"):
+    from backtesting_api import setup_backtesting_routes
+
     app = aiohttp_web.Application()
     app["db"] = db
     app.router.add_get("/download/{fmt}", http_handler)
     app.router.add_get("/download", http_handler)
     app.router.add_get("/api/signals", signals_handler)
     app.router.add_get("/api/events", events_handler)
+    setup_backtesting_routes(app)
     runner = aiohttp_web.AppRunner(app)
     await runner.setup()
     await aiohttp_web.TCPSite(runner, "0.0.0.0", 8766).start()
     print("  HTTP server on http://localhost:8766/download")
+    print("  Backtesting API on http://localhost:8766/api/backtesting/")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

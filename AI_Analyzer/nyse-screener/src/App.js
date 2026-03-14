@@ -1,5 +1,6 @@
 import "./App.css";
 import { useState, useEffect, useRef } from "react";
+import Backtesting from "./Backtesting";
 
 /* ── helpers ─────────────────────────────────────────────────────────────── */
 function getSeverity(score) {
@@ -767,6 +768,7 @@ export default function NYSEImpactScreener() {
   const [wsStatus, setWsStatus] = useState("connecting");
   const [marketState, setMarketState] = useState(null);
   const [signalData, setSignalData] = useState(null);
+  const [view, setView] = useState("screener"); // "screener" | "backtesting"
   const feedRef = useRef(null);
   const wsRef = useRef(null);
   const reconnectTimerRef = useRef(null);
@@ -910,6 +912,15 @@ export default function NYSEImpactScreener() {
                 ↓ {fmt}
               </a>
             ))}
+            {/* backtesting */}
+            <button onClick={() => setView(v => v === "screener" ? "backtesting" : "screener")} style={{
+              padding: "7px 18px", borderRadius: 10, border: "none", cursor: "pointer",
+              background: view === "backtesting" ? "#5856d6" : "#f0f0f5",
+              color: view === "backtesting" ? "#ffffff" : "#636366",
+              fontSize: 12, fontWeight: 600, transition: "all 0.15s ease",
+            }}>
+              {view === "backtesting" ? "← Live Feed" : "Backtesting"}
+            </button>
             {/* pause */}
             <button onClick={() => setIsLive(l => !l)} style={{
               padding: "7px 18px", borderRadius: 10, border: "none", cursor: "pointer",
@@ -923,31 +934,35 @@ export default function NYSEImpactScreener() {
       </div>
 
       {/* ── content ──────────────────────────────────────────────────── */}
-      <div style={{ maxWidth: 1100, margin: "0 auto", padding: "0 16px" }}>
-        <MarketStateBar marketState={marketState} />
-        <StatsBar events={events} />
-        <SectorHeatmap events={events} />
-        <SignalPerformance signalData={signalData} />
-        <FilterBar filter={filter} setFilter={setFilter} timeFilter={timeFilter}
-          setTimeFilter={setTimeFilter} threshold={threshold} setThreshold={setThreshold} />
+      {view === "backtesting" ? (
+        <Backtesting onBack={() => setView("screener")} />
+      ) : (
+        <div style={{ maxWidth: 1100, margin: "0 auto", padding: "0 16px" }}>
+          <MarketStateBar marketState={marketState} />
+          <StatsBar events={events} />
+          <SectorHeatmap events={events} />
+          <SignalPerformance signalData={signalData} />
+          <FilterBar filter={filter} setFilter={setFilter} timeFilter={timeFilter}
+            setTimeFilter={setTimeFilter} threshold={threshold} setThreshold={setThreshold} />
 
-        {/* feed */}
-        <div ref={feedRef}>
-          {filtered.length === 0 ? (
-            <div style={{ background: "#ffffff", borderRadius: 16, padding: 60, textAlign: "center",
-              boxShadow: "0 1px 4px rgba(0,0,0,0.04)" }}>
-              <div style={{ fontSize: 40, marginBottom: 12 }}>📭</div>
-              <div style={{ fontSize: 16, fontWeight: 600, color: "#3c3c43" }}>No events match your filters</div>
-              <div style={{ fontSize: 13, color: "#aeaeb2", marginTop: 4 }}>Try lowering the threshold or widening your filter</div>
-            </div>
-          ) : (
-            filtered.map(event => (
-              <EventCard key={event.id} event={event} isNew={newIds.has(event.id)}
-                trackedPairs={trackedPairs} onTrack={handleTrack} onUntrack={handleUntrack} />
-            ))
-          )}
+          {/* feed */}
+          <div ref={feedRef}>
+            {filtered.length === 0 ? (
+              <div style={{ background: "#ffffff", borderRadius: 16, padding: 60, textAlign: "center",
+                boxShadow: "0 1px 4px rgba(0,0,0,0.04)" }}>
+                <div style={{ fontSize: 40, marginBottom: 12 }}>📭</div>
+                <div style={{ fontSize: 16, fontWeight: 600, color: "#3c3c43" }}>No events match your filters</div>
+                <div style={{ fontSize: 13, color: "#aeaeb2", marginTop: 4 }}>Try lowering the threshold or widening your filter</div>
+              </div>
+            ) : (
+              filtered.map(event => (
+                <EventCard key={event.id} event={event} isNew={newIds.has(event.id)}
+                  trackedPairs={trackedPairs} onTrack={handleTrack} onUntrack={handleUntrack} />
+              ))
+            )}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* ── footer ───────────────────────────────────────────────────── */}
       <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, padding: "10px 24px",
