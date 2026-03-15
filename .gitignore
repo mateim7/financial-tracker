@@ -4,6 +4,7 @@
 *.env
 secrets.py
 config_local.py
+*-firebase-adminsdk-*.json
 
 # Python
 __pycache__/
@@ -27,3 +28,6 @@ npm-debug.log*
 # OS
 .DS_Store
 Thumbs.db
+
+# Firebase service account key
+financial-tracker-5a547-firebase-adminsdk-fbsvc-5db3550bfd.json

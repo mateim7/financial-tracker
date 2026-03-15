@@ -916,12 +916,12 @@ export default function NYSEImpactScreener() {
             ))}
             {/* backtesting */}
             <button onClick={() => setView(v => v === "screener" ? "backtesting" : "screener")} style={{
-              padding: "7px 18px", borderRadius: 10, border: "none", cursor: "pointer",
-              background: view === "backtesting" ? "#5856d6" : "#f0f0f5",
-              color: view === "backtesting" ? "#ffffff" : "#636366",
+              padding: "7px 18px", borderRadius: 10, border: view === "backtesting" ? "none" : "1px solid #5856d6", cursor: "pointer",
+              background: view === "backtesting" ? "#5856d6" : "#f3f2ff",
+              color: view === "backtesting" ? "#ffffff" : "#5856d6",
               fontSize: 12, fontWeight: 600, transition: "all 0.15s ease",
             }}>
-              {view === "backtesting" ? "← Live Feed" : "Backtesting"}
+              {view === "backtesting" ? "← Live Feed" : "⏱ Backtesting"}
             </button>
             {/* pause */}
             <button onClick={() => setIsLive(l => !l)} style={{
