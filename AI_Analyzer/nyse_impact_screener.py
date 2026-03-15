@@ -33,6 +33,7 @@ import sqlite3
 import csv
 import io
 from aiohttp import web as aiohttp_web
+from supabase_db import SupabaseDatabase
 
 # Global set of connected WebSocket clients
 WS_CLIENTS: set = set()
@@ -197,7 +198,6 @@ async def events_handler(request):
         content_type="application/json",
         headers={"Access-Control-Allow-Origin": "*"},
     )
-
 
 async def start_http_server(db: "EventDatabase"):
     from backtesting_api import setup_backtesting_routes
@@ -3703,7 +3703,8 @@ class NYSEImpactScreener:
         self.alert_dispatcher = AlertDispatcher()
         self.claude_scorer = ClaudeScorer(known_tickers=self.entity_extractor._all_known_tickers)
         self.availability_checker = StockAvailabilityChecker()
-        self.db = EventDatabase()
+        from supabase_db import SupabaseDatabase
+        self.db = SupabaseDatabase()
         self.signal_tracker = SignalOutcomeTracker(self.db)
         self.rss = None
         self.alert_threshold = alert_threshold
