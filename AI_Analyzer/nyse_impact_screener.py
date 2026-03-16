@@ -139,6 +139,9 @@ async def broadcast_event(event):
         "url":                event.url,
         "stock_availability": event.stock_availability,
         "price_data":         event.price_data,
+        "momentum_context":   event.momentum_context,
+        "insider_activity":   event.insider_activity,
+        "insider_context":    event.insider_context,
         "ws_source":          event.ws_source,
     }
     message = json.dumps(payload)
@@ -817,6 +820,9 @@ class ScoredEvent:
     url: str = ""
     stock_availability: dict = field(default_factory=dict)
     price_data: dict = field(default_factory=dict)
+    momentum_context: str = ""  # Claude's explanation of volume/price momentum alignment
+    insider_activity: dict = field(default_factory=dict)   # {ticker: [insider_tx, ...]} from SEC Form 4
+    insider_context: str = ""   # Claude's explanation of how insider activity influenced the signal
     latency_ms: float = 0.0
     ws_source: bool = False   # True if from WebSocket feed
 
@@ -981,16 +987,40 @@ class ClaudeScorer:
         valid_types = [e.value for e in EventType]
         tickers_str = ", ".join(scored.affected_tickers) if scored.affected_tickers else "MACRO"
 
-        # Build live price context string for Claude
+        # Build live price + volume context string for Claude
         price_context_parts = []
         if scored.price_data:
             for t, pd in scored.price_data.items():
                 if pd.get("price") and pd.get("change_pct") is not None:
-                    price_context_parts.append(f"  {t}: ${pd['price']} ({pd['change_pct']:+.2f}% today)")
+                    line = f"  {t}: ${pd['price']} ({pd['change_pct']:+.2f}% today)"
+                    if pd.get("rvol") is not None:
+                        rvol_label = "SURGING" if pd["rvol"] >= 2.0 else "HIGH" if pd["rvol"] >= 1.5 else "NORMAL" if pd["rvol"] >= 0.8 else "LOW"
+                        line += f" | RVOL: {pd['rvol']}x ({rvol_label})"
+                    price_context_parts.append(line)
         price_context = "\n".join(price_context_parts) if price_context_parts else "  (prices unavailable)"
 
         # Fetch historical context for these tickers
         historical_ctx = self._get_historical_context(scored.affected_tickers)
+
+        # Build insider activity context for Claude — grouped by ticker with clear boundaries
+        insider_parts = []
+        if scored.insider_activity:
+            for t, txs in scored.insider_activity.items():
+                tx_lines = []
+                for tx in txs[:3]:  # top 3 per ticker by value
+                    val_str = f"${tx['value']:,.0f}" if tx['value'] else "N/A"
+                    tx_lines.append(
+                        f"    - {tx['name']} ({tx['title']}) — {tx['type']} — "
+                        f"{tx['shares']:,} shares worth {val_str} — {tx['days_ago']}d ago"
+                        f"{' [C-SUITE]' if tx['is_csuite'] else ''}"
+                    )
+                insider_parts.append(f"  [{t}] insider filings:\n" + "\n".join(tx_lines))
+            # Also list tickers with NO insider activity so Claude doesn't cross-contaminate
+            tickers_with_data = set(scored.insider_activity.keys())
+            tickers_without = [t for t in (scored.affected_tickers or []) if t not in tickers_with_data]
+            for t in tickers_without:
+                insider_parts.append(f"  [{t}] insider filings: None")
+        insider_context = "\n".join(insider_parts) if insider_parts else "  None (no recent Form 4 filings in last 14 days)"
 
         prompt = f"""You are a financial news analyst. Analyze this news headline and return ONLY a JSON object.
 
@@ -1000,6 +1030,9 @@ Affected tickers: {tickers_str}
 
 Live market data (today's price action):
 {price_context}
+
+Recent SEC Form 4 insider activity (last 14 days):
+{insider_context}
 {historical_ctx}
 
 Current automated scoring:
@@ -1031,7 +1064,16 @@ Return JSON with these exact fields:
   "risk": one sentence on the single biggest risk that could invalidate this signal,
   "time_horizon": one of "intraday" or "swing (1-3d)" or "medium-term (1-4w)",
   "correlated_moves": array of up to 4 ticker strings (beyond the primary tickers) that are likely to move in sympathy or inverse — e.g. sector peers, suppliers, competitors. Only include real NYSE/NASDAQ tickers.
-  "ticker_signals": object mapping each affected ticker AND each correlated_moves ticker to its own signal direction. CRITICAL: In macro/geopolitical events, different assets move in OPPOSITE directions due to capital rotation. For example, a Middle East escalation is BULLISH for oil (USO, XOM), gold (GLD), and defense (ITA) but BEARISH for airlines (DAL, UAL) and consumer discretionary. A trade war is BEARISH for importers but BULLISH for domestic competitors. You MUST analyze each ticker independently. Format: {{"TICKER": {{"signal": "BUY" or "SELL" or "HOLD", "confidence": 1-100}}}}. If all tickers move the same direction, they should still each have an entry. Never apply a blanket signal to all tickers without considering how the event specifically impacts each one.
+  "ticker_signals": object mapping each affected ticker AND each correlated_moves ticker to its own signal direction. CRITICAL: In macro/geopolitical events, different assets move in OPPOSITE directions due to capital rotation. You MUST analyze each ticker independently based on the ACTUAL content of the headline — not your assumptions about what "should" happen. Follow the COMMODITY CORRELATION CHAIN carefully:
+   - Oil RISING → BEARISH airlines (fuel costs up), BULLISH energy (XOM, CVX, OXY)
+   - Oil FALLING → BULLISH airlines (fuel costs down, DAL/UAL/AAL benefit), BEARISH energy
+   - Dollar RISING → BEARISH exporters/commodities, BULLISH importers
+   - Interest rates RISING → BEARISH growth/tech, BULLISH banks
+   - Gold RISING → risk-off signal, BEARISH equities broadly
+   READ THE HEADLINE DIRECTION CAREFULLY: "Oil Falls" means oil is GOING DOWN, which is BULLISH for airlines. "Oil Surges" means oil is GOING UP, which is BEARISH for airlines. Do NOT confuse the direction.
+   Format: {{"TICKER": {{"signal": "BUY" or "SELL" or "HOLD", "confidence": 1-100}}}}. If all tickers move the same direction, they should still each have an entry. Never apply a blanket signal to all tickers without considering how the event specifically impacts each one.
+  "momentum_context": a short (1-2 sentence) explanation of how volume (RVOL) and price action align or conflict with the news signal. Example: "RVOL 2.3x confirms institutional buying pressure on bullish catalyst — high conviction move." or "Price down but RVOL low — market not reacting, signal may be noise." If RVOL data is unavailable, say "Volume data unavailable — signal based on news alone."
+  "insider_context": a short (1-2 sentence) explanation of how SEC Form 4 insider activity (above) influenced your final signal. Example: "CEO open-market buy of $2.5M within 3 days of bullish catalyst — strong insider conviction confirms BUY thesis." or "CFO sold $4M while news is bullish — insider exit divergence, capping conviction." If no insider data is available, return an empty string "".
 }}
 
 CRITICAL RULES:
@@ -1048,6 +1090,22 @@ CRITICAL RULES:
 
 3. "Respect the tape": The live market data above shows how each stock is ACTUALLY trading right now. If a stock is up significantly (+3% or more) today, do NOT issue a SELL signal on it unless you have extremely high conviction (85%+) — you would be telling someone to short a stock with strong buying momentum, which is extremely dangerous. Conversely, if a stock is down significantly (-3% or more), be cautious about issuing a BUY signal. Price action reflects information you may not have. When the tape contradicts your thesis, default to HOLD or reduce confidence substantially.
 
+4. "Tape Validation Matrix" — Cross-reference the news sentiment against BOTH price action AND volume (RVOL) to validate or invalidate signals:
+   - BULLISH news + Price UP + RVOL HIGH (≥1.5x): CONFIRMED momentum — increase confidence by 10-15 points. Institutional money is backing the move.
+   - BULLISH news + Price UP + RVOL LOW (<0.8x): WEAK confirmation — reduce confidence by 5-10 points. Move lacks volume conviction, could be retail-driven.
+   - BULLISH news + Price DOWN + RVOL HIGH: DIVERGENCE — default to HOLD. Smart money may be selling into the news. Flag as contrarian risk.
+   - BULLISH news + Price DOWN + RVOL LOW: NO REACTION — reduce confidence by 15-20 points. Market doesn't care about this catalyst.
+   - BEARISH news + Price DOWN + RVOL HIGH: CONFIRMED selloff — increase confidence for SELL. Institutional distribution confirmed.
+   - BEARISH news + Price DOWN + RVOL LOW: Orderly decline, may be priced in. Moderate confidence.
+   - BEARISH news + Price UP + RVOL HIGH: DIVERGENCE — default to HOLD. Market disagrees with the bearish thesis.
+   - BEARISH news + Price UP + RVOL LOW: Ignore the dip-buyer noise, but don't fight confirmed uptrend.
+
+5. "The C-Suite Multiplier" — If the news is BULLISH and the SEC Form 4 data above shows a significant (> $250,000) Open-Market BUY from a C-Level executive (CEO, CFO, COO, President) within the last 14 days, this is a "Holy Grail" setup. Upgrade buy_confidence heavily to 85-100 range. C-suite insiders buying with their own money on the open market, timed with a bullish catalyst, is one of the strongest confirming signals in finance.
+
+6. "The Contrarian Red Flag" — If the news is BULLISH but the SEC Form 4 data shows massive (> $500,000) Open-Market SELLS from C-suite or multiple insiders, this is an "Insider Exit Divergence." Cap buy_confidence at 60 maximum, and add a warning in the insider_context about insider selling contradicting the bullish narrative. Insiders know their company better than any analyst — if they're dumping while headlines are positive, respect their actions over the words.
+
+7. "No Insider Cross-Contamination" — The SEC insider data above is grouped by ticker in [TICKER] brackets. Each insider is an executive of THAT specific company ONLY. Do NOT attribute one company's insider activity to a different company. For example, if [AI] shows "Thomas Siebel (CEO) sold $6.8M," that is the CEO of C3.ai ($AI) — it has ZERO relevance to Palantir ($PLTR) or any other ticker. Only apply insider data to the EXACT ticker it is filed under. If a ticker shows "None," it means that company has NO recent insider activity.
+
 Only include the tickers of companies, sectors, commodities, or ETFs that are actually AFFECTED by the news.
 
 Only correct other scoring fields where automated scoring is clearly wrong. Return valid JSON only."""
@@ -1056,7 +1114,7 @@ Only correct other scoring fields where automated scoring is clearly wrong. Retu
             response = await asyncio.to_thread(
                 self.client.messages.create,
                 model="claude-sonnet-4-6",
-                max_tokens=500,
+                max_tokens=1024,
                 messages=[{"role": "user", "content": prompt}]
             )
 
@@ -1071,7 +1129,13 @@ Only correct other scoring fields where automated scoring is clearly wrong. Retu
                 self._total_output_tokens += call_out
             call_cost = (call_in * 3.0 / 1_000_000) + (call_out * 15.0 / 1_000_000)
             total_cost = (self._total_input_tokens * 3.0 / 1_000_000) + (self._total_output_tokens * 15.0 / 1_000_000)
-            print(f"  [Claude] Call #{self._total_calls} | {call_in:,} in + {call_out:,} out = ${call_cost:.4f} | "
+
+            # Detect truncation — if stop_reason is "max_tokens", output was cut off
+            stop_reason = getattr(response, 'stop_reason', None)
+            was_truncated = stop_reason == "max_tokens"
+            trunc_tag = " [TRUNCATED!]" if was_truncated else ""
+
+            print(f"  [Claude] Call #{self._total_calls} | {call_in:,} in + {call_out:,} out = ${call_cost:.4f}{trunc_tag} | "
                   f"Session total: ${total_cost:.4f} ({self._total_calls} calls) | "
                   f"{headline[:50]}...")
 
@@ -1083,7 +1147,36 @@ Only correct other scoring fields where automated scoring is clearly wrong. Retu
                 text = text.split("```")[1]
                 if text.startswith("json"):
                     text = text[4:]
-            data = json.loads(text)
+
+            # ── Truncation recovery ──
+            # If the JSON was cut off mid-generation, try to salvage it by closing
+            # open braces/brackets. This recovers partial but usable data.
+            data = None
+            try:
+                data = json.loads(text)
+            except json.JSONDecodeError:
+                if was_truncated:
+                    print(f"  [Claude] Attempting truncation recovery...")
+                    # Try closing the JSON by appending missing brackets
+                    repaired = text.rstrip().rstrip(",")
+                    # Count unclosed braces and brackets
+                    open_braces = repaired.count("{") - repaired.count("}")
+                    open_brackets = repaired.count("[") - repaired.count("]")
+                    # Check if we're inside a string (odd number of unescaped quotes)
+                    if repaired.count('"') % 2 != 0:
+                        repaired += '"'
+                    repaired += "]" * max(0, open_brackets)
+                    repaired += "}" * max(0, open_braces)
+                    try:
+                        data = json.loads(repaired)
+                        print(f"  [Claude] Truncation recovery succeeded — partial data extracted")
+                    except json.JSONDecodeError:
+                        print(f"  [Claude] Truncation recovery failed — using automated scores")
+                else:
+                    raise
+
+            if data is None:
+                raise ValueError("Could not parse Claude response")
 
             if data.get("event_type") in valid_types:
                 scored.event_type = EventType(data["event_type"])
@@ -1128,9 +1221,124 @@ Only correct other scoring fields where automated scoring is clearly wrong. Retu
                         }
                 if ts:
                     scored.ticker_signals = ts
+            if data.get("momentum_context"):
+                scored.momentum_context = str(data["momentum_context"])
+            if data.get("insider_context"):
+                scored.insider_context = str(data["insider_context"])
 
         except Exception as e:
             print(f"  [Claude] Scoring error: {e}")
+
+        # ══════════════════════════════════════════════════════════════════════
+        # POST-CLAUDE HARD ENFORCEMENT — overrides Claude when data contradicts
+        # These are programmatic safety nets that cannot be ignored by the LLM.
+        # ══════════════════════════════════════════════════════════════════════
+
+        # ── INSIDER RED FLAG ENFORCEMENT ──
+        # If insiders are dumping heavily while Claude says BUY, cap confidence
+        if scored.insider_activity and scored.buy_signal == "BUY":
+            total_insider_sells = 0
+            has_csuite_sell = False
+            for t, txs in scored.insider_activity.items():
+                for tx in txs:
+                    if tx.get("type") == "Open-Market Sale":
+                        total_insider_sells += tx.get("value", 0)
+                        if tx.get("is_csuite"):
+                            has_csuite_sell = True
+
+            if total_insider_sells > 500_000:
+                old_conf = scored.buy_confidence
+                scored.buy_confidence = min(scored.buy_confidence, 60)
+                if old_conf > 60:
+                    print(f"  [Enforce] Insider Red Flag: ${total_insider_sells:,.0f} in insider sells "
+                          f"→ capped BUY confidence {old_conf} → {scored.buy_confidence}")
+                    if not scored.insider_context or "divergence" not in scored.insider_context.lower():
+                        scored.insider_context = (
+                            f"INSIDER EXIT DIVERGENCE: ${total_insider_sells:,.0f} in open-market insider "
+                            f"sales detected in last 14 days while news is bullish. "
+                            f"{'C-suite executives are among the sellers. ' if has_csuite_sell else ''}"
+                            f"Conviction capped — insiders know their company better than headlines."
+                        )
+                # Also cap per-ticker signals
+                for tk, sig in scored.ticker_signals.items():
+                    if sig.get("signal") == "BUY" and sig.get("confidence", 0) > 60:
+                        scored.ticker_signals[tk]["confidence"] = min(sig["confidence"], 60)
+
+            # If total sells > $2M, downgrade to HOLD entirely
+            if total_insider_sells > 2_000_000 and scored.buy_signal == "BUY":
+                old_signal = scored.buy_signal
+                scored.buy_signal = "HOLD"
+                scored.buy_confidence = min(scored.buy_confidence, 45)
+                print(f"  [Enforce] Massive insider dump ${total_insider_sells:,.0f} → downgraded {old_signal} → HOLD")
+                scored.insider_context = (
+                    f"CRITICAL INSIDER EXIT: ${total_insider_sells:,.0f} in insider sales over 14 days. "
+                    f"Signal forcibly downgraded to HOLD — when C-suite dumps this aggressively "
+                    f"while headlines are bullish, it's a classic retail trap."
+                )
+                for tk, sig in scored.ticker_signals.items():
+                    if sig.get("signal") == "BUY":
+                        scored.ticker_signals[tk] = {"signal": "HOLD", "confidence": min(sig.get("confidence", 45), 45)}
+
+        # ── C-SUITE MULTIPLIER ENFORCEMENT ──
+        # If insiders are buying heavily alongside bullish news, boost confidence
+        if scored.insider_activity and scored.buy_signal == "BUY":
+            total_csuite_buys = 0
+            for t, txs in scored.insider_activity.items():
+                for tx in txs:
+                    if tx.get("type") == "Open-Market Buy" and tx.get("is_csuite"):
+                        total_csuite_buys += tx.get("value", 0)
+
+            if total_csuite_buys > 250_000:
+                old_conf = scored.buy_confidence
+                scored.buy_confidence = max(scored.buy_confidence, 85)
+                if old_conf < 85:
+                    print(f"  [Enforce] C-Suite Multiplier: ${total_csuite_buys:,.0f} C-suite buys "
+                          f"→ boosted BUY confidence {old_conf} → {scored.buy_confidence}")
+
+        # ── TAPE CONTRADICTION ENFORCEMENT ──
+        # Checks ALL tickers with signals (affected + correlated + ticker_signals)
+        all_signal_tickers = set(scored.affected_tickers)
+        all_signal_tickers.update(scored.ticker_signals.keys())
+
+        if scored.price_data:
+            for t in all_signal_tickers:
+                pd = scored.price_data.get(t)
+                if not pd:
+                    continue
+                change = pd.get("change_pct")
+                rvol = pd.get("rvol")
+                ts = scored.ticker_signals.get(t, {})
+                ticker_signal = ts.get("signal", scored.buy_signal if t in scored.affected_tickers else None)
+                ticker_conf = ts.get("confidence", scored.buy_confidence)
+
+                # ── SELL on surging stock: don't short a +3% runner ──
+                if ticker_signal == "SELL" and change is not None and change >= 3.0:
+                    new_conf = min(ticker_conf, 35)
+                    print(f"  [Enforce] Fighting the tape: SELL {t} at {change:+.2f}% "
+                          f"→ overriding to HOLD (conf {ticker_conf} → {new_conf})")
+                    if t in scored.ticker_signals:
+                        scored.ticker_signals[t] = {"signal": "HOLD", "confidence": new_conf}
+                    # If this is the primary/blanket signal, override that too
+                    if t in scored.affected_tickers and scored.buy_signal == "SELL":
+                        scored.buy_signal = "HOLD"
+                        scored.buy_confidence = new_conf
+
+                # ── BUY on dead tape: stock down + no volume ──
+                if ticker_signal == "BUY" and ticker_conf > 70:
+                    if change is not None and change < -1.0 and rvol is not None and rvol < 0.5:
+                        new_conf = min(ticker_conf, 55)
+                        print(f"  [Enforce] Dead tape for {t}: {change:+.2f}% + RVOL {rvol}x "
+                              f"→ capped confidence {ticker_conf} → {new_conf}")
+                        if t in scored.ticker_signals:
+                            scored.ticker_signals[t]["confidence"] = new_conf
+                        if t in scored.affected_tickers:
+                            scored.buy_confidence = min(scored.buy_confidence, new_conf)
+                        if not scored.momentum_context or "dead" not in scored.momentum_context.lower():
+                            scored.momentum_context = (
+                                f"Dead tape on {t}: price {change:+.2f}% with RVOL {rvol}x — "
+                                f"no institutional buying pressure. Signal is headline-only, "
+                                f"market does not confirm. Conviction reduced."
+                            )
 
         # Fix "Missing Main Character": if entity extraction found no primary tickers
         # but Claude identified tickers in correlated_moves/ticker_signals, promote
@@ -1263,7 +1471,7 @@ class StockAvailabilityChecker:
         "FVRR",
         # G
         "GD", "GDDY", "GDS", "GE", "GILD", "GIS", "GL", "GLOB", "GLW", "GM",
-        "GME", "GMED", "GNRC", "GO", "GOLD", "GOOG", "GOOGL", "GPC", "GPN",
+        "GME", "GMED", "GNRC", "GO", "GOLD", "GOOG", "GOOGL", "GPC", "GPCR", "GPN",
         "GRAB", "GRMN", "GS", "GSK", "GT", "GTLS", "GWW", "GXO",
         # H
         "H", "HAL", "HAS", "HBAN", "HBI", "HCA", "HD", "HDB", "HELE", "HES",
@@ -1338,6 +1546,42 @@ class StockAvailabilityChecker:
         # X-Z
         "X", "XEL", "XOM", "XPEV", "XRX", "XYL", "YETI", "YPF", "YUM", "YUMC",
         "Z", "ZBH", "ZBRA", "ZI", "ZION", "ZM", "ZS", "ZTO", "ZTS",
+        # ── Additional Semiconductors & Chip Equipment ──
+        "ACLS", "AEHR", "ALGM", "AMKR", "ASX", "ATOM", "CEVA", "COHU", "DIOD",
+        "FORM", "GFS", "INDI", "IPGP", "LSCC", "MKSI", "MTSI", "MXL", "NXPI",
+        "OUST", "POWI", "RMBS", "SITM", "SLAB", "SMTC", "STM", "UCTT", "UMC",
+        "WOLF",
+        # ── Lidar & Autonomous Driving ──
+        "AEVA", "AUR", "CPTN", "INVZ", "LAZR", "LIDR", "MBLY", "MVIS", "OUST",
+        # ── AI & Cloud Infrastructure ──
+        "AI", "ALTR", "APP", "BBAI", "BIGC", "CFLT", "DV", "ESTC", "GTLB",
+        "HCP", "IOT", "MNDY", "NEWR", "PD", "RBRK", "S", "TENB",
+        "ZI",
+        # ── Biotech & Pharma (mid/small cap) ──
+        "ACAD", "ALT", "ARWR", "BEAM", "BGNE", "CRSP", "CRNX", "DMTK", "DNLI",
+        "DRNA", "EXAI", "FATE", "GPCR", "HALO", "IMVT", "IONS", "IRWD", "KRTX",
+        "KYMR", "LEGN", "MGNX", "NBIX", "NTLA", "PCVX", "RARE", "RCKT", "RXRX",
+        "TXG", "VKTX", "VRNA", "XENE",
+        # ── Defense & Aerospace ──
+        "AVAV", "BWXT", "HEI", "HII", "KTOS", "LHX", "PLTR", "RKLB",
+        "TDG", "TRMB", "WWD",
+        # ── Clean Energy & Utilities ──
+        "ARRY", "BLDP", "CHPT", "CWEN", "DQ", "ENPH", "FSLR", "HASI", "MAXN",
+        "NEP", "NOVA", "RUN", "SEDG", "SHLS", "SPWR",
+        # ── Fintech & Payments ──
+        "AFRM", "BILL", "COIN", "FI", "FOUR", "GPN", "HUBS", "LC", "LSPD", "MKTX",
+        "MQ", "PAYO", "RPAY", "SOFI", "TOST", "UPST", "XP",
+        # ── Cybersecurity ──
+        "CRWD", "CYBR", "FTNT", "NET", "OKTA", "PANW", "QLYS", "RPD", "S",
+        "VRNS", "ZS",
+        # ── REITs & Real Estate ──
+        "AMT", "CCI", "DLR", "EQIX", "IRM", "PLD", "PSA", "SBAC", "SPG",
+        "STAG", "VNO", "WELL",
+        # ── Mining & Commodities ──
+        "ALB", "CLF", "FCX", "HBM", "LAC", "MP", "NEM",
+        "SCCO", "TECK", "WPM",
+        # ── Crypto & Blockchain ──
+        "RIOT", "MARA", "BITF", "CLSK", "HUT", "BTBT", "CIFR",
     }
 
     # ── XTB — ~2,000+ US stock CFDs + real stocks (sourced from official equity-table.pdf)
@@ -1393,7 +1637,7 @@ class StockAvailabilityChecker:
         # G
         "GD", "GDDY", "GDS", "GE", "GEL", "GEN", "GFL", "GHC", "GILD", "GIS",
         "GL", "GLOB", "GLW", "GM", "GME", "GMED", "GMS", "GNRC", "GO", "GOGO",
-        "GOLD", "GOOG", "GOOGL", "GOOS", "GPC", "GPI", "GPN", "GRAB", "GRBK",
+        "GOLD", "GOOG", "GOOGL", "GOOS", "GPC", "GPCR", "GPI", "GPN", "GRAB", "GRBK",
         "GRFS", "GRMN", "GS", "GSK", "GTLS", "GTN", "GWW", "GXO",
         # H
         "H", "HAIN", "HALO", "HAS", "HBI", "HCA", "HD", "HDB", "HELE", "HES",
@@ -1475,6 +1719,39 @@ class StockAvailabilityChecker:
         # X-Z
         "X", "XEL", "XOM", "XPEL", "XPEV", "XRAY", "XRX", "XYL", "YETI", "YPF",
         "YUM", "YUMC", "Z", "ZBRA", "ZBH", "ZI", "ZION", "ZM", "ZS", "ZTO", "ZTS",
+        # ── Additional Semiconductors & Chip Equipment ──
+        "ACLS", "AEHR", "ALGM", "AMKR", "ASX", "ATOM", "CEVA", "COHU", "DIOD",
+        "FORM", "GFS", "INDI", "IPGP", "LSCC", "MKSI", "MTSI", "MXL", "NXPI",
+        "OUST", "POWI", "RMBS", "SITM", "SLAB", "SMTC", "STM", "UCTT", "UMC",
+        "WOLF",
+        # ── Lidar & Autonomous Driving ──
+        "AEVA", "AUR", "CPTN", "INVZ", "LAZR", "LIDR", "MBLY", "MVIS", "OUST",
+        # ── AI & Cloud Infrastructure ──
+        "AI", "ALTR", "APP", "BBAI", "BIGC", "CFLT", "DV", "ESTC", "GTLB",
+        "HCP", "IOT", "MNDY", "NEWR", "PD", "RBRK", "S", "TENB",
+        "ZI",
+        # ── Biotech & Pharma (mid/small cap) ──
+        "ACAD", "ALT", "ARWR", "BEAM", "BGNE", "CRSP", "CRNX", "DMTK", "DNLI",
+        "DRNA", "EXAI", "FATE", "GPCR", "HALO", "IMVT", "IONS", "IRWD", "KRTX",
+        "KYMR", "LEGN", "MGNX", "NBIX", "NTLA", "PCVX", "RARE", "RCKT", "RXRX",
+        "TXG", "VKTX", "VRNA", "XENE",
+        # ── Defense & Aerospace ──
+        "AVAV", "BWXT", "HEI", "HII", "KTOS", "LHX", "PLTR", "RKLB",
+        "TDG", "TRMB", "WWD",
+        # ── Clean Energy & Utilities ──
+        "ARRY", "BLDP", "CHPT", "CWEN", "DQ", "ENPH", "FSLR", "HASI", "MAXN",
+        "NEP", "NOVA", "RUN", "SEDG", "SHLS", "SPWR",
+        # ── Fintech & Payments ──
+        "AFRM", "BILL", "COIN", "FI", "FOUR", "GPN", "HUBS", "LC", "LSPD", "MKTX",
+        "MQ", "PAYO", "RPAY", "SOFI", "TOST", "UPST", "XP",
+        # ── Cybersecurity ──
+        "CRWD", "CYBR", "FTNT", "NET", "OKTA", "PANW", "QLYS", "RPD", "S",
+        "VRNS", "ZS",
+        # ── Mining & Commodities ──
+        "ALB", "CLF", "FCX", "HBM", "LAC", "MP", "NEM",
+        "SCCO", "TECK", "WPM",
+        # ── Crypto & Blockchain ──
+        "RIOT", "MARA", "BITF", "CLSK", "HUT", "BTBT", "CIFR",
     }
 
     PRICE_TTL = 300  # seconds — re-fetch after 5 minutes
@@ -1494,7 +1771,8 @@ class StockAvailabilityChecker:
 
         def _fetch_one(ticker: str) -> tuple[str, dict]:
             try:
-                info = yf.Ticker(self._yf_symbol(ticker)).fast_info
+                yf_ticker = yf.Ticker(self._yf_symbol(ticker))
+                info = yf_ticker.fast_info
                 exchange = getattr(info, 'exchange', '') or ''
                 last_price = getattr(info, 'last_price', None)
                 prev_close = getattr(info, 'previous_close', None)
@@ -1502,12 +1780,29 @@ class StockAvailabilityChecker:
                     pct_change = round((last_price - prev_close) / prev_close * 100, 2)
                 else:
                     pct_change = None
+
+                # RVOL calculation: current volume vs 30-day average volume
+                volume = None
+                rvol = None
+                try:
+                    hist = yf_ticker.history(period="1mo", interval="1d")
+                    if hist is not None and len(hist) > 1 and "Volume" in hist.columns:
+                        today_vol = hist["Volume"].iloc[-1]
+                        avg_vol = hist["Volume"].iloc[:-1].mean()
+                        if avg_vol and avg_vol > 0:
+                            volume = int(today_vol)
+                            rvol = round(today_vol / avg_vol, 2)
+                except Exception:
+                    pass  # volume/rvol stay None if fetch fails
+
                 result = {
                     "exchange": exchange,
                     "revolut": ticker in StockAvailabilityChecker.REVOLUT_TICKERS,
                     "xtb": ticker in StockAvailabilityChecker.XTB_TICKERS,
                     "price": round(last_price, 2) if last_price else None,
                     "change_pct": pct_change,
+                    "volume": volume,
+                    "rvol": rvol,
                 }
             except Exception:
                 result = {
@@ -1516,6 +1811,8 @@ class StockAvailabilityChecker:
                     "xtb": ticker in StockAvailabilityChecker.XTB_TICKERS,
                     "price": None,
                     "change_pct": None,
+                    "volume": None,
+                    "rvol": None,
                 }
             return ticker, result
 
@@ -1527,6 +1824,171 @@ class StockAvailabilityChecker:
                 self._cache[ticker] = {"data": result, "ts": time.time()}
                 results[ticker] = result
         return results
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SEC FORM 4 INSIDER ACTIVITY — via Finnhub insider-transactions endpoint
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class InsiderActivityChecker:
+    """
+    Fetches recent SEC Form 4 filings for tickers via Finnhub.
+    Filters out noise (option exercises, 10b5-1 planned sales) and keeps
+    only open-market buys/sells by officers and directors within the last 14 days.
+    Results are cached for 30 minutes per ticker to avoid rate limits.
+    """
+
+    # Finnhub transactionCode mapping:
+    #   P = Open-Market Purchase, S = Open-Market Sale
+    #   A = Grant/Award, M = Option Exercise, G = Gift, F = Tax withholding
+    # We only care about P and S — genuine open-market intent.
+    _SIGNAL_CODES = {"P": "Open-Market Buy", "S": "Open-Market Sale"}
+
+    # C-suite titles that trigger the multiplier/red-flag rules
+    _CSUITE_TITLES = {"ceo", "cfo", "coo", "cto", "president", "chief executive officer",
+                      "chief financial officer", "chief operating officer", "chief technology officer"}
+
+    # 10% beneficial owners are institutional holders (hedge funds, Vanguard, etc.)
+    # whose filings are accounting transfers, not conviction trades. Filter them out.
+    _INSTITUTIONAL_NOISE = {"10% owner", "10% beneficial owner", "10 percent owner",
+                            "beneficial owner", "10%"}
+
+    # Individual open-market purchases rarely exceed $50M. Anything above is almost
+    # certainly an institutional block trade, secondary offering, or data error.
+    _MAX_SANE_VALUE = 50_000_000
+
+    def __init__(self):
+        self._api_key = os.environ.get("FINNHUB_API_KEY", "")
+        self._cache: dict[str, dict] = {}  # {ticker: {"data": [...], "ts": float}}
+        self._cache_ttl = 1800  # 30 minutes
+
+    def _is_fresh(self, ticker: str) -> bool:
+        entry = self._cache.get(ticker)
+        return entry is not None and (time.time() - entry["ts"]) < self._cache_ttl
+
+    async def check_tickers(self, tickers: list[str]) -> dict[str, list[dict]]:
+        """
+        Returns {ticker: [insider_tx, ...]} where each insider_tx is:
+        {
+            "name": str, "title": str, "type": "Open-Market Buy" | "Open-Market Sale",
+            "shares": int, "value": float, "date": str (YYYY-MM-DD), "days_ago": int,
+            "is_csuite": bool
+        }
+        Only includes transactions from the last 14 days with transaction codes P or S.
+        """
+        if not self._api_key:
+            return {t: [] for t in tickers}
+
+        results = {t: self._cache[t]["data"] for t in tickers if self._is_fresh(t)}
+        uncached = [t for t in tickers if not self._is_fresh(t)]
+
+        if uncached:
+            fetched = await asyncio.gather(*[asyncio.to_thread(self._fetch_one, t) for t in uncached])
+            for ticker, data in fetched:
+                self._cache[ticker] = {"data": data, "ts": time.time()}
+                results[ticker] = data
+
+        return results
+
+    def _fetch_one(self, ticker: str) -> tuple[str, list[dict]]:
+        import requests
+        from datetime import datetime, timedelta
+
+        cutoff = datetime.now() - timedelta(days=14)
+        cutoff_str = cutoff.strftime("%Y-%m-%d")
+
+        try:
+            resp = requests.get(
+                "https://finnhub.io/api/v1/stock/insider-transactions",
+                params={"symbol": ticker, "from": cutoff_str, "token": self._api_key},
+                timeout=8,
+            )
+            if resp.status_code != 200:
+                print(f"  [SEC] Finnhub {resp.status_code} for {ticker}")
+                return ticker, []
+
+            raw = resp.json().get("data", [])
+            transactions = []
+
+            for tx in raw:
+                code = (tx.get("transactionCode") or "").upper()
+                if code not in self._SIGNAL_CODES:
+                    continue  # skip option exercises, grants, gifts, tax withholding
+
+                # Filter out 10b5-1 planned sales (flagged in Finnhub data)
+                if tx.get("is10b51"):
+                    continue
+
+                filing_date = tx.get("filingDate", "")
+                if not filing_date or filing_date < cutoff_str:
+                    continue
+
+                filer_name = (tx.get("name", "") or "").strip()
+
+                # ── CRITICAL: Filter out 10% Beneficial Owners ──
+                # These are institutional holders (hedge funds, Vanguard, BlackRock, etc.)
+                # whose Form 4 filings represent internal fund transfers, options conversions,
+                # or secondary offerings — NOT genuine conviction trades.
+                filer_lower = filer_name.lower()
+                is_10pct_owner = any(noise in filer_lower for noise in self._INSTITUTIONAL_NOISE)
+                if is_10pct_owner:
+                    print(f"  [SEC] Filtered out 10% Owner filing: {filer_name} ({ticker})")
+                    continue
+
+                shares = abs(tx.get("share", 0) or 0)
+                price = tx.get("transactionPrice") or 0
+                value = round(shares * price, 2) if price else 0
+
+                # ── Value sanity check ──
+                # Individual officers don't buy/sell $50M+ on open market.
+                # If value exceeds threshold, it's likely institutional noise that
+                # slipped past the 10% owner filter.
+                if value > self._MAX_SANE_VALUE:
+                    print(f"  [SEC] Filtered suspiciously large tx: {filer_name} "
+                          f"${value:,.0f} ({ticker}) — likely institutional")
+                    continue
+
+                # Extract title — Finnhub puts role info in the name field
+                insider_title = ""
+                for label in ["CEO", "CFO", "COO", "CTO", "President", "Director",
+                              "VP", "SVP", "EVP", "General Counsel", "Secretary",
+                              "Chief Executive", "Chief Financial", "Chief Operating",
+                              "Chief Technology", "Officer"]:
+                    if label.lower() in filer_lower:
+                        insider_title = label
+                        break
+
+                days_ago = (datetime.now() - datetime.strptime(filing_date, "%Y-%m-%d")).days
+
+                is_csuite = any(t in filer_lower for t in self._CSUITE_TITLES)
+
+                transactions.append({
+                    "name": filer_name,
+                    "title": insider_title or "Insider",
+                    "type": self._SIGNAL_CODES[code],
+                    "shares": shares,
+                    "value": value,
+                    "date": filing_date,
+                    "days_ago": days_ago,
+                    "is_csuite": is_csuite,
+                })
+
+            # Sort by value descending — most significant trades first
+            transactions.sort(key=lambda x: x["value"], reverse=True)
+
+            if transactions:
+                total_buy = sum(t["value"] for t in transactions if t["type"] == "Open-Market Buy")
+                total_sell = sum(t["value"] for t in transactions if t["type"] == "Open-Market Sale")
+                buy_count = sum(1 for t in transactions if t["type"] == "Open-Market Buy")
+                sell_count = sum(1 for t in transactions if t["type"] == "Open-Market Sale")
+                print(f"  [SEC] {ticker}: {len(transactions)} insider tx (14d) — "
+                      f"{buy_count} buys ${total_buy:,.0f} / {sell_count} sells ${total_sell:,.0f}")
+
+            return ticker, transactions[:5]  # cap at top 5 by value
+
+        except Exception as e:
+            print(f"  [SEC] Error fetching insider data for {ticker}: {e}")
+            return ticker, []
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -2664,6 +3126,53 @@ class NYSEReferenceDB:
             "regeneron": "REGN",
             "vertex": "VRTX",
             "novo nordisk": "NVO", "ozempic": "NVO", "wegovy": "NVO",
+            "structure therapeutics": "GPCR", "structure therap": "GPCR",
+            "viking therapeutics": "VKTX",
+            "revolution medicines": "RVMD",
+            # Lidar & Autonomous Driving
+            "luminar": "LAZR", "luminar technologies": "LAZR",
+            "velodyne": "VLDR",
+            "innoviz": "INVZ", "innoviz technologies": "INVZ",
+            "aeva": "AEVA", "aeva technologies": "AEVA",
+            "microvision": "MVIS",
+            "ouster": "OUST",
+            "cepton": "CPTN",
+            "mobileye": "MBLY",
+            "aurora innovation": "AUR", "aurora": "AUR",
+            "waymo": "GOOGL",  # Waymo is Alphabet subsidiary
+            # Additional Semiconductors
+            "globalfoundries": "GFS", "global foundries": "GFS",
+            "wolfspeed": "WOLF",
+            "on semiconductor": "ON", "onsemi": "ON",
+            "nxp": "NXPI", "nxp semiconductors": "NXPI",
+            "stmicroelectronics": "STM", "stmicro": "STM",
+            "microchip technology": "MCHP", "microchip": "MCHP",
+            "lattice semiconductor": "LSCC", "lattice": "LSCC",
+            "monolithic power": "MPWR",
+            "silicon labs": "SLAB",
+            "rambus": "RMBS",
+            "amkor": "AMKR", "amkor technology": "AMKR",
+            "umc": "UMC", "united micro": "UMC",
+            "skyworks": "SWKS", "skyworks solutions": "SWKS",
+            "indie semiconductor": "INDI",
+            "coherent": "COHR",
+            # Additional Cybersecurity
+            "cyberark": "CYBR",
+            "qualys": "QLYS",
+            "varonis": "VRNS",
+            "rapid7": "RPD",
+            # Additional Fintech
+            "toast": "TOST",
+            "upstart": "UPST",
+            "lightspeed": "LSPD",
+            "bill.com": "BILL", "bill holdings": "BILL",
+            "marqeta": "MQ",
+            # Additional Clean Energy
+            "chargepoint": "CHPT",
+            "sunrun": "RUN",
+            "array technologies": "ARRY",
+            "shoals": "SHLS",
+            "maxeon": "MAXN",
             # EVs / Autos
             "general motors": "GM",
             "ford": "F", "ford motor": "F",
@@ -3787,6 +4296,7 @@ class NYSEImpactScreener:
         self.scoring_engine = MarketImpactScoringEngine(self.reference_db)
         self.alert_dispatcher = AlertDispatcher()
         self.availability_checker = StockAvailabilityChecker()
+        self.insider_checker = InsiderActivityChecker()
         from supabase_db import SupabaseDatabase
         self.db = SupabaseDatabase()
         self.claude_scorer = ClaudeScorer(known_tickers=self.entity_extractor._all_known_tickers, db=self.db)
@@ -3826,7 +4336,11 @@ class NYSEImpactScreener:
         if scored.affected_tickers:
             availability = await self.availability_checker.check_tickers(scored.affected_tickers)
             scored.stock_availability = availability
-            scored.price_data = {t: {"price": v.get("price"), "change_pct": v.get("change_pct")} for t, v in availability.items()}
+            scored.price_data = {t: {"price": v.get("price"), "change_pct": v.get("change_pct"), "volume": v.get("volume"), "rvol": v.get("rvol")} for t, v in availability.items()}
+
+            # Fetch SEC Form 4 insider activity (Finnhub, cached 30 min)
+            insider_data = await self.insider_checker.check_tickers(scored.affected_tickers)
+            scored.insider_activity = {t: txs for t, txs in insider_data.items() if txs}
 
         # Skip Claude for LOW impact events (score < 40)
         if scored.impact_score >= 40:
@@ -3854,7 +4368,21 @@ class NYSEImpactScreener:
                 extra_avail = await self.availability_checker.check_tickers(list(extra_tickers))
                 scored.stock_availability.update(extra_avail)
                 for t, v in extra_avail.items():
-                    scored.price_data[t] = {"price": v.get("price"), "change_pct": v.get("change_pct")}
+                    scored.price_data[t] = {"price": v.get("price"), "change_pct": v.get("change_pct"), "volume": v.get("volume"), "rvol": v.get("rvol")}
+
+            # ── Fix "Volume data unavailable" when RVOL was fetched post-Claude ──
+            # Claude ran before correlated tickers had price data, so it may have
+            # defaulted to "Volume data unavailable." Now that we have the data,
+            # auto-generate a momentum_context from the actual numbers.
+            if scored.momentum_context and "unavailable" in scored.momentum_context.lower():
+                rvol_parts = []
+                for t in list(scored.affected_tickers) + list(scored.correlated_moves):
+                    pd = scored.price_data.get(t, {})
+                    if pd.get("rvol") is not None and pd.get("change_pct") is not None:
+                        rvol_label = "SURGING" if pd["rvol"] >= 2.0 else "HIGH" if pd["rvol"] >= 1.5 else "NORMAL" if pd["rvol"] >= 0.8 else "LOW"
+                        rvol_parts.append(f"{t}: {pd['change_pct']:+.2f}% with RVOL {pd['rvol']}x ({rvol_label})")
+                if rvol_parts:
+                    scored.momentum_context = "Post-fetch volume data: " + "; ".join(rvol_parts[:4]) + "."
 
             # ── POST-CLAUDE FILTER — drop if Claude re-scored below threshold ──
             if scored.impact_score < 40:

@@ -79,13 +79,25 @@ function SourceTag({ source, tier, wsSource }) {
 function TickerPill({ ticker, priceData }) {
   const pd = priceData || {};
   const up = pd.change_pct >= 0;
+  const rvol = pd.rvol;
+  const rvolHigh = rvol != null && rvol >= 1.5;
+  const rvolSurge = rvol != null && rvol >= 2.0;
   return (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "4px 10px",
-      borderRadius: 10, background: "#f0f0f5", fontSize: 12, fontWeight: 600 }}>
+      borderRadius: 10, background: rvolSurge ? "#fff3e0" : rvolHigh ? "#fef9e7" : "#f0f0f5",
+      fontSize: 12, fontWeight: 600,
+      border: rvolHigh ? "1px solid #f5a62333" : "none" }}>
       <span style={{ color: "#0066ff" }}>${ticker}</span>
       {pd.price != null && (
         <span style={{ color: up ? "#1a9d4a" : "#d63031", fontFamily: "'JetBrains Mono', monospace", fontSize: 11 }}>
           {pd.price.toFixed(2)} <span style={{ fontSize: 10 }}>{up ? "+" : ""}{pd.change_pct}%</span>
+        </span>
+      )}
+      {rvol != null && (
+        <span style={{ fontSize: 10, color: rvolSurge ? "#e65100" : rvolHigh ? "#f5a623" : "#8e8e93",
+          fontFamily: "'JetBrains Mono', monospace", fontWeight: 700 }}
+          title={`Relative Volume: ${rvol}x vs 30-day avg`}>
+          {rvolHigh ? "\uD83D\uDD25" : ""}{rvol}x
         </span>
       )}
     </span>
@@ -170,12 +182,19 @@ function EventCard({ event, isNew, trackedPairs, onTrack, onUntrack }) {
     onMouseEnter={e => { e.currentTarget.style.boxShadow = "0 4px 20px rgba(0,0,0,0.08)"; e.currentTarget.style.transform = "translateY(-1px)"; }}
     onMouseLeave={e => { e.currentTarget.style.boxShadow = isNew ? "0 0 0 2px rgba(0,102,255,0.15), 0 2px 12px rgba(0,0,0,0.06)" : "0 1px 4px rgba(0,0,0,0.04)"; e.currentTarget.style.transform = "translateY(0)"; }}
     >
-      {/* top row: direction, type, source, time, score ring */}
+      {/* top row: direction, type, source, SEC badge, time, score ring */}
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
         <DirectionPill direction={event.direction} />
         <span style={{ fontSize: 11, color: "#8e8e93", background: "#f0f0f5", padding: "3px 8px", borderRadius: 6, fontWeight: 500 }}>
           {event.type.replace(/_/g, " ")}
         </span>
+        {event.insider_activity && Object.keys(event.insider_activity).length > 0 && (
+          <span style={{ fontSize: 10, fontWeight: 700, color: "#5b21b6", background: "#ede9fe",
+            padding: "3px 8px", borderRadius: 6, border: "1px solid #c4b5fd",
+            display: "inline-flex", alignItems: "center", gap: 3 }}>
+            {"\uD83D\uDCC4"} SEC Form 4
+          </span>
+        )}
         <SourceTag source={event.source} tier={event.tier} wsSource={event.ws_source} />
         <span style={{ fontSize: 12, color: "#aeaeb2", marginLeft: "auto", whiteSpace: "nowrap" }}>{timeAgo}</span>
         <ScoreRing score={event.score} />
@@ -227,6 +246,63 @@ function EventCard({ event, isNew, trackedPairs, onTrack, onUntrack }) {
               ⚠ {event.risk}
             </span>
           )}
+        </div>
+      )}
+
+      {/* momentum context */}
+      {event.momentum_context && (
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 12,
+          padding: "10px 14px", borderRadius: 10, background: "#fef9e7", border: "1px solid #f5a62322" }}>
+          <span style={{ fontSize: 14, flexShrink: 0, lineHeight: "20px" }}>{"\u26A1"}</span>
+          <span style={{ fontSize: 12, color: "#5d4e37", lineHeight: 1.5, fontWeight: 500 }}>
+            {event.momentum_context}
+          </span>
+        </div>
+      )}
+
+      {/* SEC insider activity micro-summaries */}
+      {event.insider_activity && Object.keys(event.insider_activity).length > 0 && (
+        <div style={{ marginBottom: 12 }}>
+          {Object.entries(event.insider_activity).flatMap(([ticker, txs]) =>
+            txs.slice(0, 2).map((tx, i) => {
+              const isBuy = tx.type === "Open-Market Buy";
+              const valStr = tx.value >= 1000000
+                ? `$${(tx.value / 1000000).toFixed(1)}M`
+                : tx.value >= 1000
+                ? `$${(tx.value / 1000).toFixed(0)}K`
+                : `$${tx.value.toLocaleString()}`;
+              return (
+                <div key={`${ticker}-${i}`} style={{ display: "flex", alignItems: "center", gap: 6,
+                  padding: "6px 12px", borderRadius: 8, marginBottom: 4,
+                  background: isBuy ? "#f0fdf4" : "#fef2f2",
+                  border: `1px solid ${isBuy ? "#bbf7d0" : "#fecaca"}` }}>
+                  <span style={{ fontSize: 13 }}>{"\uD83D\uDC54"}</span>
+                  <span style={{ fontSize: 11, fontWeight: 600, color: isBuy ? "#15803d" : "#dc2626" }}>
+                    {tx.title} {isBuy ? "bought" : "sold"} {valStr} of ${ticker}
+                  </span>
+                  <span style={{ fontSize: 10, color: "#8e8e93", marginLeft: "auto" }}>
+                    {tx.days_ago === 0 ? "today" : tx.days_ago === 1 ? "yesterday" : `${tx.days_ago}d ago`}
+                  </span>
+                  {tx.is_csuite && (
+                    <span style={{ fontSize: 9, fontWeight: 700, color: "#fff",
+                      background: isBuy ? "#15803d" : "#dc2626",
+                      padding: "1px 5px", borderRadius: 4 }}>C-SUITE</span>
+                  )}
+                </div>
+              );
+            })
+          )}
+        </div>
+      )}
+
+      {/* insider context explanation */}
+      {event.insider_context && event.insider_context !== "No recent insider activity to cross-reference." && (
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 12,
+          padding: "10px 14px", borderRadius: 10, background: "#ede9fe", border: "1px solid #c4b5fd33" }}>
+          <span style={{ fontSize: 14, flexShrink: 0, lineHeight: "20px" }}>{"\uD83D\uDCC4"}</span>
+          <span style={{ fontSize: 12, color: "#4c1d95", lineHeight: 1.5, fontWeight: 500 }}>
+            {event.insider_context}
+          </span>
         </div>
       )}
 
