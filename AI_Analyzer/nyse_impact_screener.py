@@ -874,13 +874,13 @@ class ClaudeScorer:
         if self.SKIP_PATTERNS.search(headline):
             return "headline matches skip pattern (opinion/listicle/ad)"
 
-        # Skip if we already called Claude for a very similar headline recently (10 min)
+        # Skip if we already called Claude for a very similar headline recently (30 min)
         h = self._headline_sim_hash(headline)
         now = time.time()
         # Clean old entries
-        self._recent_headline_hashes = {k: v for k, v in self._recent_headline_hashes.items() if now - v < 600}
+        self._recent_headline_hashes = {k: v for k, v in self._recent_headline_hashes.items() if now - v < 1800}
         if h in self._recent_headline_hashes:
-            return "similar headline already scored in last 10 min"
+            return "similar headline already scored in last 30 min"
 
         # Skip UNKNOWN event type with low automated score (borderline, likely noise)
         if scored.event_type == EventType.UNKNOWN and scored.impact_score < 50:
@@ -1060,11 +1060,20 @@ Only correct other scoring fields where automated scoring is clearly wrong. Retu
                 messages=[{"role": "user", "content": prompt}]
             )
 
-            # Track token usage
+            # Track token usage with per-call cost breakdown
             self._total_calls += 1
+            call_in = 0
+            call_out = 0
             if hasattr(response, 'usage'):
-                self._total_input_tokens += getattr(response.usage, 'input_tokens', 0)
-                self._total_output_tokens += getattr(response.usage, 'output_tokens', 0)
+                call_in = getattr(response.usage, 'input_tokens', 0)
+                call_out = getattr(response.usage, 'output_tokens', 0)
+                self._total_input_tokens += call_in
+                self._total_output_tokens += call_out
+            call_cost = (call_in * 3.0 / 1_000_000) + (call_out * 15.0 / 1_000_000)
+            total_cost = (self._total_input_tokens * 3.0 / 1_000_000) + (self._total_output_tokens * 15.0 / 1_000_000)
+            print(f"  [Claude] Call #{self._total_calls} | {call_in:,} in + {call_out:,} out = ${call_cost:.4f} | "
+                  f"Session total: ${total_cost:.4f} ({self._total_calls} calls) | "
+                  f"{headline[:50]}...")
 
             # Cache this headline to avoid duplicate calls
             self._recent_headline_hashes[self._headline_sim_hash(headline)] = time.time()
@@ -1175,11 +1184,19 @@ Return ONLY JSON:
                 max_tokens=120,
                 messages=[{"role": "user", "content": prompt}]
             )
-            # Track tokens
+            # Track tokens with per-call cost (Haiku pricing: $0.80/$4.00 per 1M tokens)
             self._total_calls += 1
+            call_in = 0
+            call_out = 0
             if hasattr(response, 'usage'):
-                self._total_input_tokens += getattr(response.usage, 'input_tokens', 0)
-                self._total_output_tokens += getattr(response.usage, 'output_tokens', 0)
+                call_in = getattr(response.usage, 'input_tokens', 0)
+                call_out = getattr(response.usage, 'output_tokens', 0)
+                self._total_input_tokens += call_in
+                self._total_output_tokens += call_out
+            call_cost = (call_in * 0.80 / 1_000_000) + (call_out * 4.0 / 1_000_000)
+            total_cost = (self._total_input_tokens * 3.0 / 1_000_000) + (self._total_output_tokens * 15.0 / 1_000_000)
+            print(f"  [Claude] Validation call #{self._total_calls} (Haiku) | {call_in:,} in + {call_out:,} out = ${call_cost:.4f} | "
+                  f"Session total: ${total_cost:.4f}")
             text = response.content[0].text.strip()
             if text.startswith("```"):
                 text = text.split("```")[1]
