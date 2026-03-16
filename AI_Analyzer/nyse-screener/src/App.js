@@ -703,7 +703,7 @@ function StatsBar({ events }) {
 }
 
 /* ── filter bar ──────────────────────────────────────────────────────────── */
-function FilterBar({ filter, setFilter, timeFilter, setTimeFilter, threshold, setThreshold }) {
+function FilterBar({ filter, setFilter, timeFilter, setTimeFilter, threshold, setThreshold, horizonFilter, setHorizonFilter }) {
   const filters = [
     { key: "all", label: "All" },
     { key: "critical", label: "Critical" },
@@ -717,6 +717,12 @@ function FilterBar({ filter, setFilter, timeFilter, setTimeFilter, threshold, se
     { key: "1h", label: "1h" },
     { key: "4h", label: "4h" },
     { key: "24h", label: "24h" },
+  ];
+  const horizonFilters = [
+    { key: "all", label: "All" },
+    { key: "intraday", label: "Intraday" },
+    { key: "swing", label: "Swing (1-3d)" },
+    { key: "medium", label: "Medium (1-4w)" },
   ];
 
   return (
@@ -755,6 +761,18 @@ function FilterBar({ filter, setFilter, timeFilter, setTimeFilter, threshold, se
           }}>{t.label}</button>
         ))}
       </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8 }}>
+        <span style={{ fontSize: 11, color: "#aeaeb2", fontWeight: 600, marginRight: 4 }}>Horizon</span>
+        {horizonFilters.map(h => (
+          <button key={h.key} onClick={() => setHorizonFilter(h.key)} style={{
+            padding: "4px 12px", borderRadius: 20, border: "none", cursor: "pointer",
+            fontSize: 12, fontWeight: 600,
+            background: horizonFilter === h.key ? "#e8f0fe" : "#f0f0f5",
+            color: horizonFilter === h.key ? "#1a73e8" : "#aeaeb2",
+            transition: "all 0.2s ease",
+          }}>{h.label}</button>
+        ))}
+      </div>
     </div>
   );
 }
@@ -765,6 +783,7 @@ export default function NYSEImpactScreener() {
   const [newIds, setNewIds] = useState(new Set());
   const [filter, setFilter] = useState("all");
   const [timeFilter, setTimeFilter] = useState("all");
+  const [horizonFilter, setHorizonFilter] = useState("all");
   const [threshold, setThreshold] = useState(0);
   const [isLive, setIsLive] = useState(true);
   const [wsStatus, setWsStatus] = useState("connecting");
@@ -843,6 +862,12 @@ export default function NYSEImpactScreener() {
     if (timeFilter !== "all") {
       const cutoff = { "1h": 3600, "4h": 14400, "24h": 86400 }[timeFilter] * 1000;
       if (Date.now() - e.ts > cutoff) return false;
+    }
+    if (horizonFilter !== "all") {
+      const h = (e.time_horizon || "").toLowerCase();
+      if (horizonFilter === "intraday" && !h.includes("intraday")) return false;
+      if (horizonFilter === "swing" && !h.includes("swing")) return false;
+      if (horizonFilter === "medium" && !h.includes("medium")) return false;
     }
     if (filter === "critical") return e.score >= 80;
     if (filter === "high") return e.score >= 60;
@@ -945,7 +970,8 @@ export default function NYSEImpactScreener() {
           <SectorHeatmap events={events} />
           <SignalPerformance signalData={signalData} />
           <FilterBar filter={filter} setFilter={setFilter} timeFilter={timeFilter}
-            setTimeFilter={setTimeFilter} threshold={threshold} setThreshold={setThreshold} />
+            setTimeFilter={setTimeFilter} threshold={threshold} setThreshold={setThreshold}
+            horizonFilter={horizonFilter} setHorizonFilter={setHorizonFilter} />
 
           {/* feed */}
           <div ref={feedRef}>

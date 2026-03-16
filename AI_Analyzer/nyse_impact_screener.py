@@ -840,9 +840,10 @@ class ClaudeScorer:
         r')'
     )
 
-    def __init__(self, known_tickers: set[str] = None):
+    def __init__(self, known_tickers: set[str] = None, db=None):
         import os
         self._known_tickers = known_tickers or set()
+        self._db = db  # Reference to database for historical context
         api_key = os.environ.get("ANTHROPIC_API_KEY")
         if not api_key:
             print("  [Claude] ANTHROPIC_API_KEY not set — falling back to keyword scoring")
@@ -887,6 +888,69 @@ class ClaudeScorer:
 
         return None
 
+    def _get_historical_context(self, tickers: list[str]) -> str:
+        """Query database for prior events mentioning the same tickers (last 30 days)."""
+        if not self._db or not tickers:
+            return ""
+        try:
+            cutoff = time.time() - (30 * 86400)  # 30 days
+            prior_events = []
+            if hasattr(self._db, 'client'):
+                # Supabase path
+                for ticker in tickers[:3]:  # limit to top 3 tickers
+                    result = self._db.client.table("events").select(
+                        "headline, event_type, direction, buy_signal, impact_score, timestamp"
+                    ).ilike("affected_tickers", f"%{ticker}%").gte(
+                        "timestamp", cutoff
+                    ).order("timestamp", desc=True).limit(5).execute()
+                    for row in (result.data or []):
+                        prior_events.append(row)
+            elif hasattr(self._db, 'con'):
+                # SQLite path
+                for ticker in tickers[:3]:
+                    rows = self._db.con.execute(
+                        "SELECT headline, event_type, direction, buy_signal, impact_score, timestamp "
+                        "FROM events WHERE affected_tickers LIKE ? AND timestamp >= ? "
+                        "ORDER BY timestamp DESC LIMIT 5",
+                        (f"%{ticker}%", cutoff)
+                    ).fetchall()
+                    for row in rows:
+                        prior_events.append({
+                            "headline": row[0], "event_type": row[1], "direction": row[2],
+                            "buy_signal": row[3], "impact_score": row[4], "timestamp": row[5],
+                        })
+
+            if not prior_events:
+                return ""
+
+            # Deduplicate by headline
+            seen = set()
+            unique = []
+            for e in prior_events:
+                h = e.get("headline", "")
+                if h not in seen:
+                    seen.add(h)
+                    unique.append(e)
+
+            if not unique:
+                return ""
+
+            # Format context
+            lines = ["\nHistorical context (prior events for these tickers in the last 30 days):"]
+            for e in unique[:5]:
+                import datetime
+                ts = e.get("timestamp", 0)
+                date_str = datetime.datetime.fromtimestamp(ts).strftime("%Y-%m-%d") if ts else "?"
+                lines.append(
+                    f"  [{date_str}] {e.get('event_type', '?')} | {e.get('direction', '?')} | "
+                    f"Score {e.get('impact_score', '?')} | {e.get('headline', '?')[:80]}"
+                )
+            lines.append("Use this context to avoid treating old/known events as new information.")
+            return "\n".join(lines)
+        except Exception as ex:
+            print(f"  [Claude] Historical context lookup failed: {ex}")
+            return ""
+
     @property
     def usage_stats(self) -> dict:
         return {
@@ -925,6 +989,9 @@ class ClaudeScorer:
                     price_context_parts.append(f"  {t}: ${pd['price']} ({pd['change_pct']:+.2f}% today)")
         price_context = "\n".join(price_context_parts) if price_context_parts else "  (prices unavailable)"
 
+        # Fetch historical context for these tickers
+        historical_ctx = self._get_historical_context(scored.affected_tickers)
+
         prompt = f"""You are a financial news analyst. Analyze this news headline and return ONLY a JSON object.
 
 Headline: {headline}
@@ -933,6 +1000,7 @@ Affected tickers: {tickers_str}
 
 Live market data (today's price action):
 {price_context}
+{historical_ctx}
 
 Current automated scoring:
 - event_type: {scored.event_type.value}
@@ -3701,10 +3769,10 @@ class NYSEImpactScreener:
         self.entity_extractor = EntityExtractor(self.reference_db)
         self.scoring_engine = MarketImpactScoringEngine(self.reference_db)
         self.alert_dispatcher = AlertDispatcher()
-        self.claude_scorer = ClaudeScorer(known_tickers=self.entity_extractor._all_known_tickers)
         self.availability_checker = StockAvailabilityChecker()
         from supabase_db import SupabaseDatabase
         self.db = SupabaseDatabase()
+        self.claude_scorer = ClaudeScorer(known_tickers=self.entity_extractor._all_known_tickers, db=self.db)
         self.signal_tracker = SignalOutcomeTracker(self.db)
         self.rss = None
         self.alert_threshold = alert_threshold
