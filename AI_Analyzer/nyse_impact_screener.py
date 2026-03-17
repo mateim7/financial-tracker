@@ -1224,7 +1224,10 @@ Only correct other scoring fields where automated scoring is clearly wrong. Retu
             if data.get("momentum_context"):
                 scored.momentum_context = str(data["momentum_context"])
             if data.get("insider_context"):
-                scored.insider_context = str(data["insider_context"])
+                ic = str(data["insider_context"]).strip()
+                # Strip useless "no data" responses — frontend doesn't need them
+                if ic and "no recent insider" not in ic.lower() and "none" != ic.lower():
+                    scored.insider_context = ic
 
         except Exception as e:
             print(f"  [Claude] Scoring error: {e}")
@@ -1311,27 +1314,45 @@ Only correct other scoring fields where automated scoring is clearly wrong. Retu
                 ticker_signal = ts.get("signal", scored.buy_signal if t in scored.affected_tickers else None)
                 ticker_conf = ts.get("confidence", scored.buy_confidence)
 
-                # ── SELL on surging stock: don't short a +3% runner ──
-                if ticker_signal == "SELL" and change is not None and change >= 3.0:
-                    new_conf = min(ticker_conf, 35)
+                # ── SELL on green stock: don't short a stock that's rising ──
+                if ticker_signal == "SELL" and change is not None and change > 0:
+                    # Aggressive override for strong runners (+3%+), softer for mild green
+                    if change >= 3.0:
+                        new_conf = min(ticker_conf, 30)
+                    elif change >= 1.0:
+                        new_conf = min(ticker_conf, 40)
+                    else:
+                        new_conf = min(ticker_conf, 50)
                     print(f"  [Enforce] Fighting the tape: SELL {t} at {change:+.2f}% "
                           f"→ overriding to HOLD (conf {ticker_conf} → {new_conf})")
                     if t in scored.ticker_signals:
                         scored.ticker_signals[t] = {"signal": "HOLD", "confidence": new_conf}
-                    # If this is the primary/blanket signal, override that too
                     if t in scored.affected_tickers and scored.buy_signal == "SELL":
                         scored.buy_signal = "HOLD"
                         scored.buy_confidence = new_conf
 
-                # ── BUY on dead tape: stock down + no volume ──
-                if ticker_signal == "BUY" and ticker_conf > 70:
-                    if change is not None and change < -1.0 and rvol is not None and rvol < 0.5:
+                # ── BUY on dead RVOL: no institutional volume to confirm thesis ──
+                if ticker_signal == "BUY" and rvol is not None and rvol < 0.5:
+                    # Dead volume = no institutional confirmation, cap regardless of price
+                    if ticker_conf > 55:
                         new_conf = min(ticker_conf, 55)
-                        print(f"  [Enforce] Dead tape for {t}: {change:+.2f}% + RVOL {rvol}x "
-                              f"→ capped confidence {ticker_conf} → {new_conf}")
+                        print(f"  [Enforce] Dead RVOL for {t}: RVOL {rvol}x "
+                              f"→ capped BUY confidence {ticker_conf} → {new_conf}")
                         if t in scored.ticker_signals:
                             scored.ticker_signals[t]["confidence"] = new_conf
                         if t in scored.affected_tickers:
+                            scored.buy_confidence = min(scored.buy_confidence, new_conf)
+
+                # ── BUY on sinking stock with low volume: strongest downgrade ──
+                if ticker_signal == "BUY" and ticker_conf > 40:
+                    if change is not None and change < 0 and rvol is not None and rvol < 0.8:
+                        new_conf = min(ticker_conf, 40)
+                        print(f"  [Enforce] Sinking + dead tape for {t}: {change:+.2f}% + RVOL {rvol}x "
+                              f"→ downgraded to HOLD (conf {ticker_conf} → {new_conf})")
+                        if t in scored.ticker_signals:
+                            scored.ticker_signals[t] = {"signal": "HOLD", "confidence": new_conf}
+                        if t in scored.affected_tickers:
+                            scored.buy_signal = "HOLD"
                             scored.buy_confidence = min(scored.buy_confidence, new_conf)
                         if not scored.momentum_context or "dead" not in scored.momentum_context.lower():
                             scored.momentum_context = (
@@ -4375,14 +4396,113 @@ class NYSEImpactScreener:
             # defaulted to "Volume data unavailable." Now that we have the data,
             # auto-generate a momentum_context from the actual numbers.
             if scored.momentum_context and "unavailable" in scored.momentum_context.lower():
-                rvol_parts = []
+                # Build a human-readable narrative from post-fetch volume data
+                green_tickers = []
+                red_tickers = []
+                dead_vol_tickers = []
+                hot_vol_tickers = []
                 for t in list(scored.affected_tickers) + list(scored.correlated_moves):
                     pd = scored.price_data.get(t, {})
                     if pd.get("rvol") is not None and pd.get("change_pct") is not None:
-                        rvol_label = "SURGING" if pd["rvol"] >= 2.0 else "HIGH" if pd["rvol"] >= 1.5 else "NORMAL" if pd["rvol"] >= 0.8 else "LOW"
-                        rvol_parts.append(f"{t}: {pd['change_pct']:+.2f}% with RVOL {pd['rvol']}x ({rvol_label})")
-                if rvol_parts:
-                    scored.momentum_context = "Post-fetch volume data: " + "; ".join(rvol_parts[:4]) + "."
+                        if pd["change_pct"] > 0:
+                            green_tickers.append((t, pd["change_pct"], pd["rvol"]))
+                        else:
+                            red_tickers.append((t, pd["change_pct"], pd["rvol"]))
+                        if pd["rvol"] < 0.5:
+                            dead_vol_tickers.append(t)
+                        elif pd["rvol"] >= 1.5:
+                            hot_vol_tickers.append(t)
+
+                if dead_vol_tickers or hot_vol_tickers or green_tickers or red_tickers:
+                    parts = []
+                    if dead_vol_tickers:
+                        parts.append(
+                            f"Volume is uniformly LOW ({', '.join(dead_vol_tickers)}) — "
+                            f"no institutional conviction behind today's moves"
+                        )
+                    if hot_vol_tickers:
+                        parts.append(
+                            f"Heavy volume on {', '.join(hot_vol_tickers)} confirms "
+                            f"institutional participation"
+                        )
+                    if green_tickers and red_tickers:
+                        green_str = ", ".join(f"{t} {c:+.1f}%" for t, c, _ in green_tickers[:3])
+                        red_str = ", ".join(f"{t} {c:+.1f}%" for t, c, _ in red_tickers[:3])
+                        parts.append(f"Mixed tape: {green_str} rising while {red_str} falling")
+                    elif green_tickers and not red_tickers:
+                        all_str = ", ".join(f"{t} {c:+.1f}%" for t, c, _ in green_tickers[:4])
+                        max_change = max(c for _, c, _ in green_tickers)
+                        if max_change >= 3.0:
+                            parts.append(
+                                f"Strong rally across tickers ({all_str}) — market is ignoring the bearish headline. "
+                                f"Shorting into a {max_change:+.1f}% surge is high-risk"
+                            )
+                        else:
+                            parts.append(f"All tickers green ({all_str}) on low volume — modest drift, not a catalyst-driven move")
+                    elif red_tickers and not green_tickers:
+                        all_str = ", ".join(f"{t} {c:+.1f}%" for t, c, _ in red_tickers[:4])
+                        parts.append(f"Broad weakness across sector ({all_str})")
+                    scored.momentum_context = ". ".join(parts) + "."
+
+            # ══════════════════════════════════════════════════════════════════
+            # SECOND-PASS TAPE ENFORCEMENT — runs AFTER correlated ticker
+            # prices are fetched. The first pass (in ClaudeScorer) only had
+            # primary ticker data; this pass catches correlated tickers too.
+            # ══════════════════════════════════════════════════════════════════
+            all_signal_tickers_2 = set(scored.affected_tickers)
+            all_signal_tickers_2.update(scored.ticker_signals.keys())
+
+            for t in all_signal_tickers_2:
+                pd = scored.price_data.get(t)
+                if not pd:
+                    continue
+                change = pd.get("change_pct")
+                rvol = pd.get("rvol")
+                ts = scored.ticker_signals.get(t, {})
+                ticker_signal = ts.get("signal", scored.buy_signal if t in scored.affected_tickers else None)
+                ticker_conf = ts.get("confidence", scored.buy_confidence)
+
+                # ── SELL on green stock ──
+                if ticker_signal == "SELL" and change is not None and change > 0:
+                    if change >= 3.0:
+                        new_conf = min(ticker_conf, 30)
+                    elif change >= 1.0:
+                        new_conf = min(ticker_conf, 40)
+                    else:
+                        new_conf = min(ticker_conf, 50)
+                    print(f"  [Enforce-2] Fighting the tape: SELL {t} at {change:+.2f}% "
+                          f"→ overriding to HOLD (conf {ticker_conf} → {new_conf})")
+                    if t in scored.ticker_signals:
+                        scored.ticker_signals[t] = {"signal": "HOLD", "confidence": new_conf}
+                    if t in scored.affected_tickers and scored.buy_signal == "SELL":
+                        scored.buy_signal = "HOLD"
+                        scored.buy_confidence = new_conf
+
+                # ── BUY on dead RVOL ──
+                if ticker_signal == "BUY" and rvol is not None and rvol < 0.5:
+                    if ticker_conf > 55:
+                        new_conf = min(ticker_conf, 55)
+                        print(f"  [Enforce-2] Dead RVOL for {t}: RVOL {rvol}x "
+                              f"→ capped BUY confidence {ticker_conf} → {new_conf}")
+                        if t in scored.ticker_signals:
+                            scored.ticker_signals[t]["confidence"] = new_conf
+                        if t in scored.affected_tickers:
+                            scored.buy_confidence = min(scored.buy_confidence, new_conf)
+
+                # ── BUY on sinking stock + dead volume → HOLD ──
+                # Re-read signal after possible cap above
+                ts2 = scored.ticker_signals.get(t, {})
+                ticker_signal_2 = ts2.get("signal", scored.buy_signal if t in scored.affected_tickers else None)
+                ticker_conf_2 = ts2.get("confidence", scored.buy_confidence)
+                if ticker_signal_2 == "BUY" and change is not None and change < 0 and rvol is not None and rvol < 0.8:
+                    new_conf = min(ticker_conf_2, 40)
+                    print(f"  [Enforce-2] Sinking + low volume for {t}: {change:+.2f}% + RVOL {rvol}x "
+                          f"→ downgraded to HOLD (conf {ticker_conf_2} → {new_conf})")
+                    if t in scored.ticker_signals:
+                        scored.ticker_signals[t] = {"signal": "HOLD", "confidence": new_conf}
+                    if t in scored.affected_tickers:
+                        scored.buy_signal = "HOLD"
+                        scored.buy_confidence = min(scored.buy_confidence, new_conf)
 
             # ── POST-CLAUDE FILTER — drop if Claude re-scored below threshold ──
             if scored.impact_score < 40:

@@ -6,13 +6,8 @@ services:
     ports:
       - "8765:8765"
       - "8766:8766"
-    environment:
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - FINNHUB_API_KEY=${FINNHUB_API_KEY:-}
-      - BENZINGA_API_KEY=${BENZINGA_API_KEY:-}
-      - POLYGON_API_KEY=${POLYGON_API_KEY:-}
-      - SUPABASE_URL=${SUPABASE_URL:-}
-      - SUPABASE_KEY=${SUPABASE_KEY:-}
+    env_file:
+      - .env
     restart: unless-stopped
 
   frontend:
