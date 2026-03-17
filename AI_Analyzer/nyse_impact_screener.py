@@ -1106,6 +1106,10 @@ CRITICAL RULES:
 
 7. "No Insider Cross-Contamination" — The SEC insider data above is grouped by ticker in [TICKER] brackets. Each insider is an executive of THAT specific company ONLY. Do NOT attribute one company's insider activity to a different company. For example, if [AI] shows "Thomas Siebel (CEO) sold $6.8M," that is the CEO of C3.ai ($AI) — it has ZERO relevance to Palantir ($PLTR) or any other ticker. Only apply insider data to the EXACT ticker it is filed under. If a ticker shows "None," it means that company has NO recent insider activity.
 
+8. "Symmetrical Volume Veto" — RVOL is the ultimate arbiter of institutional conviction for BOTH bullish AND bearish signals. If a ticker's RVOL < 0.8x, the market exhibits "Dead Tape" (no institutional participation). You MUST default to HOLD with confidence between 20-45 for that ticker. Do NOT issue BUY or SELL on dead tape. The ONLY exception is Tier-1 hard catalysts: unexpected Earnings Beat/Miss, unannounced M&A, FDA approval/rejection, or bankruptcy.
+
+9. "Global Score Aggregator" — Your impact_score must be the mathematical average of the individual ticker_signals confidence scores, NOT a qualitative mood score of the headline text. If two tickers score 74 and 30, the impact_score must be 52, not 74.
+
 Only include the tickers of companies, sectors, commodities, or ETFs that are actually AFFECTED by the news.
 
 Only correct other scoring fields where automated scoring is clearly wrong. Return valid JSON only."""
@@ -1331,34 +1335,30 @@ Only correct other scoring fields where automated scoring is clearly wrong. Retu
                         scored.buy_signal = "HOLD"
                         scored.buy_confidence = new_conf
 
-                # ── BUY on dead RVOL: no institutional volume to confirm thesis ──
-                if ticker_signal == "BUY" and rvol is not None and rvol < 0.5:
-                    # Dead volume = no institutional confirmation, cap regardless of price
-                    if ticker_conf > 55:
-                        new_conf = min(ticker_conf, 55)
-                        print(f"  [Enforce] Dead RVOL for {t}: RVOL {rvol}x "
-                              f"→ capped BUY confidence {ticker_conf} → {new_conf}")
-                        if t in scored.ticker_signals:
-                            scored.ticker_signals[t]["confidence"] = new_conf
-                        if t in scored.affected_tickers:
-                            scored.buy_confidence = min(scored.buy_confidence, new_conf)
+                # ── SYMMETRICAL VOLUME VETO ──
+                # RVOL < 0.8x = Dead Tape → force HOLD, cap 45, floor 20
+                # Exception: Tier-1 hard catalysts (earnings, M&A, FDA, bankruptcy)
+                TIER1_CATALYSTS = {
+                    "EARNINGS_BEAT", "EARNINGS_MISS", "FDA_APPROVAL", "FDA_REJECTION",
+                    "MA_ANNOUNCED", "MA_COMPLETED", "MA_BLOCKED", "BANKRUPTCY",
+                    "STOCK_SPLIT", "BUYBACK_ANNOUNCED",
+                }
+                is_tier1 = scored.event_type in TIER1_CATALYSTS if hasattr(scored, 'event_type') else False
 
-                # ── BUY on sinking stock with low volume: strongest downgrade ──
-                if ticker_signal == "BUY" and ticker_conf > 40:
-                    if change is not None and change < 0 and rvol is not None and rvol < 0.8:
-                        new_conf = min(ticker_conf, 40)
-                        print(f"  [Enforce] Sinking + dead tape for {t}: {change:+.2f}% + RVOL {rvol}x "
-                              f"→ downgraded to HOLD (conf {ticker_conf} → {new_conf})")
+                if rvol is not None and rvol < 0.8 and not is_tier1:
+                    if ticker_signal in ("BUY", "SELL"):
+                        new_conf = max(20, min(ticker_conf, 45))
+                        print(f"  [Enforce] Symmetrical Volume Veto for {t}: RVOL {rvol}x < 0.8 "
+                              f"→ {ticker_signal} overridden to HOLD (conf {ticker_conf} → {new_conf})")
                         if t in scored.ticker_signals:
                             scored.ticker_signals[t] = {"signal": "HOLD", "confidence": new_conf}
                         if t in scored.affected_tickers:
                             scored.buy_signal = "HOLD"
-                            scored.buy_confidence = min(scored.buy_confidence, new_conf)
-                        if not scored.momentum_context or "dead" not in scored.momentum_context.lower():
+                            scored.buy_confidence = new_conf
+                        if not scored.momentum_context or "dead tape" not in scored.momentum_context.lower():
                             scored.momentum_context = (
-                                f"Dead tape on {t}: price {change:+.2f}% with RVOL {rvol}x — "
-                                f"no institutional buying pressure. Signal is headline-only, "
-                                f"market does not confirm. Conviction reduced."
+                                f"Dead tape on {t}: RVOL {rvol}x — no institutional participation. "
+                                f"Price moves are noise, not conviction. Signal vetoed to HOLD."
                             )
 
         # Fix "Missing Main Character": if entity extraction found no primary tickers
@@ -1463,7 +1463,7 @@ class StockAvailabilityChecker:
         # B
         "BA", "BABA", "BAC", "BAH", "BAM", "BAP", "BAX", "BBAR", "BBD", "BBY",
         "BDX", "BE", "BEN", "BEPC", "BG", "BHC", "BHP", "BIDU", "BIIB", "BILI",
-        "BIO", "BJ", "BK", "BKNG", "BKR", "BLK", "BLL", "BMA", "BMRN", "BMY",
+        "BIO", "BJ", "BK", "BKNG", "BKR", "BLK", "BLL", "BMA", "BMBL", "BMRN", "BMY",
         "BN", "BNTX", "BOX", "BP", "BPOP", "BR", "BRK.B", "BRO", "BROS", "BSX",
         "BTG", "BUD", "BVN", "BWA", "BX", "BYND",
         # C
@@ -4478,31 +4478,42 @@ class NYSEImpactScreener:
                         scored.buy_signal = "HOLD"
                         scored.buy_confidence = new_conf
 
-                # ── BUY on dead RVOL ──
-                if ticker_signal == "BUY" and rvol is not None and rvol < 0.5:
-                    if ticker_conf > 55:
-                        new_conf = min(ticker_conf, 55)
-                        print(f"  [Enforce-2] Dead RVOL for {t}: RVOL {rvol}x "
-                              f"→ capped BUY confidence {ticker_conf} → {new_conf}")
-                        if t in scored.ticker_signals:
-                            scored.ticker_signals[t]["confidence"] = new_conf
-                        if t in scored.affected_tickers:
-                            scored.buy_confidence = min(scored.buy_confidence, new_conf)
+                # ── SYMMETRICAL VOLUME VETO (Second Pass) ──
+                TIER1_CATALYSTS_2 = {
+                    "EARNINGS_BEAT", "EARNINGS_MISS", "FDA_APPROVAL", "FDA_REJECTION",
+                    "MA_ANNOUNCED", "MA_COMPLETED", "MA_BLOCKED", "BANKRUPTCY",
+                    "STOCK_SPLIT", "BUYBACK_ANNOUNCED",
+                }
+                is_tier1_2 = scored.event_type in TIER1_CATALYSTS_2 if hasattr(scored, 'event_type') else False
 
-                # ── BUY on sinking stock + dead volume → HOLD ──
-                # Re-read signal after possible cap above
-                ts2 = scored.ticker_signals.get(t, {})
-                ticker_signal_2 = ts2.get("signal", scored.buy_signal if t in scored.affected_tickers else None)
-                ticker_conf_2 = ts2.get("confidence", scored.buy_confidence)
-                if ticker_signal_2 == "BUY" and change is not None and change < 0 and rvol is not None and rvol < 0.8:
-                    new_conf = min(ticker_conf_2, 40)
-                    print(f"  [Enforce-2] Sinking + low volume for {t}: {change:+.2f}% + RVOL {rvol}x "
-                          f"→ downgraded to HOLD (conf {ticker_conf_2} → {new_conf})")
-                    if t in scored.ticker_signals:
-                        scored.ticker_signals[t] = {"signal": "HOLD", "confidence": new_conf}
-                    if t in scored.affected_tickers:
-                        scored.buy_signal = "HOLD"
-                        scored.buy_confidence = min(scored.buy_confidence, new_conf)
+                if rvol is not None and rvol < 0.8 and not is_tier1_2:
+                    # Re-read signal after possible SELL→HOLD override above
+                    ts2 = scored.ticker_signals.get(t, {})
+                    ticker_signal_2 = ts2.get("signal", scored.buy_signal if t in scored.affected_tickers else None)
+                    ticker_conf_2 = ts2.get("confidence", scored.buy_confidence)
+
+                    if ticker_signal_2 in ("BUY", "SELL"):
+                        new_conf = max(20, min(ticker_conf_2, 45))
+                        print(f"  [Enforce-2] Symmetrical Volume Veto for {t}: RVOL {rvol}x < 0.8 "
+                              f"→ {ticker_signal_2} overridden to HOLD (conf {ticker_conf_2} → {new_conf})")
+                        if t in scored.ticker_signals:
+                            scored.ticker_signals[t] = {"signal": "HOLD", "confidence": new_conf}
+                        if t in scored.affected_tickers:
+                            scored.buy_signal = "HOLD"
+                            scored.buy_confidence = new_conf
+
+            # ══════════════════════════════════════════════════════════════════
+            # GLOBAL SCORE AGGREGATOR — the headline score (top-right circle)
+            # is the mathematical average of all final per-ticker confidence
+            # scores, NOT the qualitative "mood" of the headline text.
+            # ══════════════════════════════════════════════════════════════════
+            if scored.ticker_signals:
+                final_confs = [sig.get("confidence", 50) for sig in scored.ticker_signals.values()]
+                old_score = scored.impact_score
+                scored.impact_score = round(sum(final_confs) / len(final_confs))
+                if old_score != scored.impact_score:
+                    print(f"  [Aggregate] Global score: {old_score} → {scored.impact_score} "
+                          f"(avg of {len(final_confs)} ticker scores: {final_confs})")
 
             # ── POST-CLAUDE FILTER — drop if Claude re-scored below threshold ──
             if scored.impact_score < 40:
