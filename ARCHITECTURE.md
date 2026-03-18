@@ -9,7 +9,8 @@ The **Financial Impact Screener** is a real-time market intelligence dashboard t
 - **Frontend:** React (Create React App) — served via nginx in Docker
 - **Database:** Supabase (PostgreSQL) — cloud-hosted, replaces original SQLite
 - **AI Models:** Claude Sonnet 4.6 (primary scoring) + Claude Haiku 4.5 (validation layer)
-- **Market Data:** yfinance (free, no API key), Finnhub (SEC Form 4 insider data)
+- **Market Data:** Finnhub (real-time quotes including pre/post-market + SEC Form 4 insider data), yfinance (RVOL calculation, fallback prices)
+- **News Feeds:** 90+ RSS sources + WebSocket feeds (Finnhub, Benzinga Pro, Polygon.io)
 - **Deployment:** Docker Compose (2 services: backend + frontend)
 
 ---
@@ -32,8 +33,8 @@ The **Financial Impact Screener** is a real-time market intelligence dashboard t
     │ External Services  │
     ├────────────────────┤
     │ • Anthropic API    │ ← Claude Sonnet + Haiku
-    │ • yfinance         │ ← Live prices, RVOL
-    │ • Finnhub API      │ ← SEC Form 4 insider data
+    │ • Finnhub API      │ ← Real-time quotes (pre/post-market) + SEC Form 4
+    │ • yfinance         │ ← RVOL calculation, fallback prices
     │ • 90+ RSS feeds    │ ← MarketWatch, Reuters, CNBC, etc.
     │ • Supabase         │ ← PostgreSQL database
     └────────────────────┘
@@ -53,7 +54,7 @@ The **Financial Impact Screener** is a real-time market intelligence dashboard t
 | ~781 | `RawNewsEvent` | Normalized event dataclass: timestamp, headline, body, source, tickers |
 | ~795 | `ScoredEvent` | Fully processed event with all fields: impact_score, buy_signal, price_data, insider_activity, momentum_context, etc. |
 | ~834 | `ClaudeScorer` | Calls Claude Sonnet for enhanced scoring, includes prompt injection (prices, RVOL, insiders, historical context) and post-Claude enforcement |
-| ~1448 | `StockAvailabilityChecker` | Fetches live prices via yfinance, calculates RVOL (Relative Volume), checks broker availability (Revolut/XTB) |
+| ~1448 | `StockAvailabilityChecker` | Fetches real-time prices via Finnhub (includes pre/post-market), calculates RVOL via yfinance, checks broker availability (Revolut/XTB) |
 | ~1854 | `InsiderActivityChecker` | Fetches SEC Form 4 filings via Finnhub API, filters noise (option exercises, 10% beneficial owners, 10b5-1 plans) |
 | ~2019 | `LiveMarketState` | Tracks VIX, SPY daily change, pre-market detection, earnings season heuristic |
 | ~2181 | `SignalOutcomeTracker` | Records BUY/SELL signals and tracks performance at +1h, +4h, +1d, +1w checkpoints |
@@ -89,8 +90,8 @@ WebSocket drain ─────────┘         │
                          └────────┬────────┘
                                   ▼
                          ┌─────────────────┐
-                    4.   │ Price + RVOL     │  yfinance: live price, daily change %, RVOL
-                         │ (primary only)   │  for affected_tickers (primary tickers)
+                    4.   │ Price + RVOL     │  Finnhub: real-time price (pre/post-market)
+                         │ (primary only)   │  yfinance: RVOL (30-day volume history)
                          └────────┬────────┘
                                   ▼
                          ┌─────────────────┐
@@ -109,7 +110,8 @@ WebSocket drain ─────────┘         │
                          │ Enforcement (1)  │  • Insider Red Flag (sells > $500K → cap 60)
                          │                 │  • C-Suite Multiplier (buys > $250K → boost 85)
                          │                 │  • Tape Contradiction (SELL on green → HOLD)
-                         │                 │  • Dead RVOL (BUY on RVOL < 0.5 → cap 55)
+                         │                 │  • Symmetrical Volume Veto (RVOL < 0.8 → HOLD)
+                         │                 │  • Global Score Aggregator (avg of ticker scores)
                          │                 │  • Sinking + dead vol → downgrade to HOLD
                          └────────┬────────┘
                                   ▼
@@ -200,6 +202,8 @@ The LLM receives a structured prompt with all available data:
 5. **"C-Suite Multiplier"** — C-level open-market buys > $250K aligned with bullish news → boost confidence to 85-100
 6. **"Contrarian Red Flag"** — Insider sells > $500K during bullish news → cap confidence at 60, warn of "Insider Exit Divergence"
 7. **"No Insider Cross-Contamination"** — Each insider filing is strictly tied to its ticker, never attributed to others
+8. **"Symmetrical Volume Veto"** — If RVOL < 0.8x (Dead Tape), cap score between 20-45 and default to HOLD. Exception: Tier-1 hard catalysts (earnings, M&A, FDA, bankruptcy)
+9. **"Global Score Aggregator"** — The global headline score (top-right circle) must be the mathematical average of all per-ticker confidence scores, not a qualitative mood score
 
 ### Claude Response Format
 ```json
@@ -244,8 +248,9 @@ These rules **override Claude's output** when market data contradicts the signal
 | **Massive Insider Dump** | BUY + insider sells > $2M | Downgrade to HOLD, cap confidence at 45 |
 | **C-Suite Multiplier** | BUY + C-level buys > $250K | Boost confidence to 85+ |
 | **SELL on green stock** | SELL + price > 0% | Override to HOLD (cap: 30/40/50 based on magnitude) |
-| **BUY on dead RVOL** | BUY + RVOL < 0.5x | Cap confidence at 55 |
+| **Symmetrical Volume Veto** | Any signal + RVOL < 0.8x | Force HOLD, cap at 45, floor at 20. Exempt: Tier-1 hard catalysts (earnings, M&A, FDA, bankruptcy) |
 | **BUY on sinking + low vol** | BUY + price < 0% + RVOL < 0.8x | Downgrade to HOLD, cap confidence at 40 |
+| **Global Score Aggregator** | Always (post-scoring) | Global impact_score = mathematical average of all per-ticker confidence scores |
 
 ### Second Pass (runs after correlated ticker prices are fetched)
 Re-applies the same tape enforcement rules to all tickers in `ticker_signals`, catching correlated tickers that didn't have price data during the first pass.
@@ -286,7 +291,9 @@ RVOL = Today's Volume / 30-Day Average Volume
 | < 0.8x | LOW | Below average — price moves are drift, not conviction |
 | < 0.5x | DEAD | No institutional participation — signals unreliable |
 
-**Data Source:** yfinance 1-month daily history (free, no API key required).
+**RVOL Data Source:** yfinance 1-month daily history (free, no API key required).
+
+**Price Data Source:** Finnhub `/quote` endpoint (real-time, includes pre-market and after-hours). Falls back to yfinance if Finnhub is unavailable.
 
 **5-minute cache TTL** to avoid redundant API calls for the same ticker within a scoring cycle.
 
@@ -344,7 +351,7 @@ Runs independently via system cron every 30 minutes during market hours:
 **Logic:**
 1. Query Supabase for all pending signals (completed = 0)
 2. For each signal, check if enough time has elapsed for each checkpoint (+1h, +4h, +1d, +1w)
-3. Fetch current price via yfinance
+3. Fetch current price via Finnhub (real-time, pre/post-market), fallback to yfinance
 4. Calculate % change from entry price
 5. Determine outcome: WIN (>+0.5% for BUY, <-0.5% for SELL), LOSS (opposite), FLAT (within ±0.5%)
 6. Update the signal_outcomes row
@@ -424,7 +431,7 @@ Connects to `ws://localhost:8765`. On message, parses JSON and renders event car
 | Variable | Required | Source | Purpose |
 |----------|----------|--------|---------|
 | `ANTHROPIC_API_KEY` | Yes | Anthropic Console | Claude Sonnet + Haiku API calls |
-| `FINNHUB_API_KEY` | Yes | Finnhub.io | SEC Form 4 insider transaction data |
+| `FINNHUB_API_KEY` | Yes | Finnhub.io | Real-time quotes (pre/post-market) + SEC Form 4 insider data |
 | `SUPABASE_URL` | Yes | Supabase Dashboard | PostgreSQL database URL |
 | `SUPABASE_KEY` | Yes | Supabase Dashboard | Database service role key |
 | `BENZINGA_API_KEY` | No | Benzinga Pro | Real-time WebSocket news (optional) |
@@ -442,8 +449,8 @@ The backend tracks token usage and cost per API call:
 |-------|-----------|-------------|-------|
 | Claude Sonnet 4.6 | $3.00 / 1M tokens | $15.00 / 1M tokens | Primary scoring (every event) |
 | Claude Haiku 4.5 | $0.80 / 1M tokens | $4.00 / 1M tokens | Validation (BUY signals > 50% only) |
-| yfinance | Free | Free | Price data, RVOL calculation |
-| Finnhub | Free tier (250 calls/min) | Free | SEC Form 4 insider data |
+| Finnhub | Free tier (250 calls/min) | Free | Real-time quotes (pre/post-market), SEC Form 4 insider data |
+| yfinance | Free | Free | RVOL calculation (30-day volume history), fallback prices |
 
 Cost is logged per call with running totals visible in backend console output.
 
