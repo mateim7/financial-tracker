@@ -1789,23 +1789,53 @@ class StockAvailabilityChecker:
 
     async def check_tickers(self, tickers: list[str]) -> dict:
         import yfinance as yf
+        import requests as _requests
+
+        finnhub_key = os.getenv("FINNHUB_API_KEY", "")
+
+        def _fetch_finnhub_quote(ticker: str) -> dict | None:
+            """Fetch real-time quote from Finnhub (includes pre/post-market)."""
+            if not finnhub_key:
+                return None
+            try:
+                resp = _requests.get(
+                    "https://finnhub.io/api/v1/quote",
+                    params={"symbol": ticker, "token": finnhub_key},
+                    timeout=5,
+                )
+                if resp.status_code != 200:
+                    return None
+                data = resp.json()
+                # c = current price, pc = previous close, dp = percent change
+                c = data.get("c")
+                pc = data.get("pc")
+                dp = data.get("dp")
+                if c and c > 0:
+                    return {"price": round(c, 2), "prev_close": pc, "change_pct": round(dp, 2) if dp else None}
+            except Exception:
+                pass
+            return None
 
         def _fetch_one(ticker: str) -> tuple[str, dict]:
             try:
-                yf_ticker = yf.Ticker(self._yf_symbol(ticker))
-                info = yf_ticker.fast_info
-                exchange = getattr(info, 'exchange', '') or ''
-                last_price = getattr(info, 'last_price', None)
-                prev_close = getattr(info, 'previous_close', None)
-                if last_price and prev_close and prev_close != 0:
-                    pct_change = round((last_price - prev_close) / prev_close * 100, 2)
-                else:
-                    pct_change = None
+                # ── Step 1: Real-time price from Finnhub (includes pre/post-market) ──
+                fh_quote = _fetch_finnhub_quote(ticker)
 
-                # RVOL calculation: current volume vs 30-day average volume
+                # ── Step 2: RVOL from yfinance (30-day volume history) ──
                 volume = None
                 rvol = None
+                exchange = ""
+                yf_price = None
+                yf_change = None
                 try:
+                    yf_ticker = yf.Ticker(self._yf_symbol(ticker))
+                    info = yf_ticker.fast_info
+                    exchange = getattr(info, 'exchange', '') or ''
+                    yf_price = getattr(info, 'last_price', None)
+                    prev_close = getattr(info, 'previous_close', None)
+                    if yf_price and prev_close and prev_close != 0:
+                        yf_change = round((yf_price - prev_close) / prev_close * 100, 2)
+
                     hist = yf_ticker.history(period="1mo", interval="1d")
                     if hist is not None and len(hist) > 1 and "Volume" in hist.columns:
                         today_vol = hist["Volume"].iloc[-1]
@@ -1814,14 +1844,22 @@ class StockAvailabilityChecker:
                             volume = int(today_vol)
                             rvol = round(today_vol / avg_vol, 2)
                 except Exception:
-                    pass  # volume/rvol stay None if fetch fails
+                    pass
+
+                # ── Step 3: Use Finnhub price if available, else fall back to yfinance ──
+                if fh_quote and fh_quote["price"]:
+                    final_price = fh_quote["price"]
+                    final_change = fh_quote["change_pct"]
+                else:
+                    final_price = round(yf_price, 2) if yf_price else None
+                    final_change = yf_change
 
                 result = {
                     "exchange": exchange,
                     "revolut": ticker in StockAvailabilityChecker.REVOLUT_TICKERS,
                     "xtb": ticker in StockAvailabilityChecker.XTB_TICKERS,
-                    "price": round(last_price, 2) if last_price else None,
-                    "change_pct": pct_change,
+                    "price": final_price,
+                    "change_pct": final_change,
                     "volume": volume,
                     "rvol": rvol,
                 }
@@ -2229,12 +2267,27 @@ class SignalOutcomeTracker:
         if not tickers_needed:
             return
 
-        # Batch fetch current prices
+        # Batch fetch current prices (Finnhub for real-time, yfinance fallback)
         prices = {}
+        import requests as _requests
+        finnhub_key = os.getenv("FINNHUB_API_KEY", "")
 
         def _fetch_prices():
             for t in tickers_needed:
                 try:
+                    # Try Finnhub first (includes pre/post-market)
+                    if finnhub_key:
+                        resp = _requests.get(
+                            "https://finnhub.io/api/v1/quote",
+                            params={"symbol": t, "token": finnhub_key},
+                            timeout=5,
+                        )
+                        if resp.status_code == 200:
+                            c = resp.json().get("c")
+                            if c and c > 0:
+                                prices[t] = round(c, 2)
+                                continue
+                    # Fallback to yfinance
                     info = yf.Ticker(StockAvailabilityChecker._yf_symbol(t)).fast_info
                     p = getattr(info, "last_price", None)
                     if p:
@@ -2292,9 +2345,22 @@ class SignalOutcomeTracker:
         if not event_id or not ticker or signal not in ("BUY", "SELL"):
             return
 
-        # Fetch current price as entry point
+        # Fetch current price as entry point (Finnhub for real-time, yfinance fallback)
+        import requests as _requests
+        finnhub_key = os.getenv("FINNHUB_API_KEY", "")
+
         def _get_price():
             try:
+                if finnhub_key:
+                    resp = _requests.get(
+                        "https://finnhub.io/api/v1/quote",
+                        params={"symbol": ticker, "token": finnhub_key},
+                        timeout=5,
+                    )
+                    if resp.status_code == 200:
+                        c = resp.json().get("c")
+                        if c and c > 0:
+                            return round(c, 2)
                 info = yf.Ticker(StockAvailabilityChecker._yf_symbol(ticker)).fast_info
                 return getattr(info, "last_price", None)
             except Exception:
