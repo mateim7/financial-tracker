@@ -1110,6 +1110,14 @@ CRITICAL RULES:
 
 9. "Global Score Aggregator" — Your impact_score must be the mathematical average of the individual ticker_signals confidence scores, NOT a qualitative mood score of the headline text. If two tickers score 74 and 30, the impact_score must be 52, not 74.
 
+10. "BUY on Red Tape" — NEVER issue a BUY on a stock that is currently DOWN. A falling price means the market is telling you something. Rules:
+   - Price DOWN more than -3%: HOLD, max confidence 30. This is a falling knife.
+   - Price DOWN -1% to -3% + RVOL HIGH (≥1.5x): HOLD, max confidence 25. High volume selling = confirmed institutional distribution. This is the WORST setup for a BUY.
+   - Price DOWN -1% to -3% + RVOL NORMAL (0.8-1.5x): HOLD, max confidence 40. Declining on real participation.
+   - Price DOWN 0% to -1% + RVOL HIGH (≥1.5x): HOLD, max confidence 50. Mild red but institutions may be distributing.
+   - Price DOWN 0% to -1% + RVOL NORMAL: BUY allowed but cap confidence at 55.
+   There are NO exceptions — even Tier-1 catalysts (earnings beat, FDA approval) can be "sell the news" events where institutions dump into retail buying liquidity. The tape is always the final arbiter.
+
 Only include the tickers of companies, sectors, commodities, or ETFs that are actually AFFECTED by the news.
 
 Only correct other scoring fields where automated scoring is clearly wrong. Return valid JSON only."""
@@ -1335,9 +1343,7 @@ Only correct other scoring fields where automated scoring is clearly wrong. Retu
                         scored.buy_signal = "HOLD"
                         scored.buy_confidence = new_conf
 
-                # ── SYMMETRICAL VOLUME VETO ──
-                # RVOL < 0.8x = Dead Tape → force HOLD, cap 45, floor 20
-                # Exception: Tier-1 hard catalysts (earnings, M&A, FDA, bankruptcy)
+                # ── Tier-1 catalyst exception (shared by BUY-on-red and Volume Veto) ──
                 TIER1_CATALYSTS = {
                     "EARNINGS_BEAT", "EARNINGS_MISS", "FDA_APPROVAL", "FDA_REJECTION",
                     "MA_ANNOUNCED", "MA_COMPLETED", "MA_BLOCKED", "BANKRUPTCY",
@@ -1345,6 +1351,46 @@ Only correct other scoring fields where automated scoring is clearly wrong. Retu
                 }
                 is_tier1 = scored.event_type in TIER1_CATALYSTS if hasattr(scored, 'event_type') else False
 
+                # ── BUY on red stock: don't buy a stock that's falling ──
+                # High RVOL on a red stock is WORSE — it confirms institutional distribution
+                # NO EXCEPTIONS — even Tier-1 catalysts (earnings, FDA) can be "sell the news"
+                # events where institutions dump into retail buying liquidity
+                if ticker_signal == "BUY" and change is not None and change < 0:
+                    if change <= -3.0:
+                        # Deep red: never BUY regardless of volume
+                        new_conf = min(ticker_conf, 30)
+                    elif change <= -1.0:
+                        if rvol is not None and rvol >= 1.5:
+                            # Red + high volume = confirmed institutional selling
+                            new_conf = min(ticker_conf, 25)
+                        elif rvol is not None and rvol >= 0.8:
+                            # Red + normal volume = declining on real participation
+                            new_conf = min(ticker_conf, 40)
+                        else:
+                            # Red + low volume = drift, caught by volume veto too
+                            new_conf = min(ticker_conf, 35)
+                    else:
+                        # Mild red (0 to -1%)
+                        if rvol is not None and rvol >= 1.5:
+                            # Mild red + high volume = caution, institutions may be selling
+                            new_conf = min(ticker_conf, 50)
+                        elif rvol is not None and rvol >= 0.8:
+                            # Mild red + normal volume = soft weakness
+                            new_conf = min(ticker_conf, 55)
+                        else:
+                            # Mild red + low volume → volume veto handles this
+                            new_conf = min(ticker_conf, 45)
+                    print(f"  [Enforce] BUY on red tape: {t} at {change:+.2f}% RVOL {rvol}x "
+                          f"→ overriding to HOLD (conf {ticker_conf} → {new_conf})")
+                    if t in scored.ticker_signals:
+                        scored.ticker_signals[t] = {"signal": "HOLD", "confidence": new_conf}
+                    if t in scored.affected_tickers and scored.buy_signal == "BUY":
+                        scored.buy_signal = "HOLD"
+                        scored.buy_confidence = new_conf
+
+                # ── SYMMETRICAL VOLUME VETO ──
+                # RVOL < 0.8x = Dead Tape → force HOLD, cap 45, floor 20
+                # Exception: Tier-1 hard catalysts (uses is_tier1 from above)
                 if rvol is not None and rvol < 0.8 and not is_tier1:
                     if ticker_signal in ("BUY", "SELL"):
                         new_conf = max(20, min(ticker_conf, 45))
