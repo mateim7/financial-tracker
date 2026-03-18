@@ -69,6 +69,29 @@ async def ws_handler(websocket):
         WS_CLIENTS.discard(websocket)
 
 
+async def _ws_broadcast(payload: str):
+    """Send payload to all connected WS clients in parallel using asyncio.gather.
+    Removes disconnected clients automatically."""
+    global WS_CLIENTS
+    if not WS_CLIENTS:
+        return
+    async def _safe_send(ws):
+        try:
+            await ws.send(payload)
+            return True
+        except (websockets.ConnectionClosed, RuntimeError):
+            return False
+    results = await asyncio.gather(*(
+        _safe_send(ws) for ws in WS_CLIENTS
+    ), return_exceptions=True)
+    # Remove failed clients
+    alive = set()
+    for ws, ok in zip(WS_CLIENTS, results):
+        if ok is True:
+            alive.add(ws)
+    WS_CLIENTS = alive
+
+
 async def _broadcast_signal_performance():
     """Helper to push updated signal stats to all clients."""
     if not WS_CLIENTS or _SIGNAL_TRACKER_DB is None:
@@ -80,13 +103,7 @@ async def _broadcast_signal_performance():
         "type": "signal_performance", "stats": stats, "recent": recent,
         "tracked_ids": tracked,
     })
-    disconnected = set()
-    for ws in WS_CLIENTS:
-        try:
-            await ws.send(payload)
-        except websockets.ConnectionClosed:
-            disconnected.add(ws)
-    WS_CLIENTS -= disconnected
+    await _ws_broadcast(payload)
 
 # Global references set in main() so WS handler can send state on connect
 _LIVE_MARKET_STATE: "LiveMarketState | None" = None
@@ -99,18 +116,11 @@ async def broadcast_market_state():
     if not WS_CLIENTS or _LIVE_MARKET_STATE is None:
         return
     payload = json.dumps({"type": "market_state", **_LIVE_MARKET_STATE.state})
-    disconnected = set()
-    for ws in WS_CLIENTS:
-        try:
-            await ws.send(payload)
-        except websockets.ConnectionClosed:
-            disconnected.add(ws)
-    WS_CLIENTS -= disconnected
+    await _ws_broadcast(payload)
 
 
 async def broadcast_event(event):
     """Serialize a ScoredEvent and push it to all connected WebSocket clients."""
-    global WS_CLIENTS
     if not WS_CLIENTS:
         return
     payload = {
@@ -144,14 +154,7 @@ async def broadcast_event(event):
         "insider_context":    event.insider_context,
         "ws_source":          event.ws_source,
     }
-    message = json.dumps(payload)
-    disconnected = set()
-    for ws in WS_CLIENTS:
-        try:
-            await ws.send(message)
-        except websockets.ConnectionClosed:
-            disconnected.add(ws)
-    WS_CLIENTS -= disconnected
+    await _ws_broadcast(json.dumps(payload))
 
 
 async def http_handler(request):
@@ -856,8 +859,8 @@ class ClaudeScorer:
             self.client = None
         else:
             import anthropic
-            self.client = anthropic.Anthropic(api_key=api_key)
-            print("  [Claude] API key loaded — enhanced scoring enabled")
+            self.client = anthropic.AsyncAnthropic(api_key=api_key)
+            print("  [Claude] AsyncAnthropic loaded — truly async scoring enabled")
 
         # Token usage tracking
         self._total_input_tokens = 0
@@ -867,6 +870,82 @@ class ClaudeScorer:
 
         # Recent headline cache — avoid calling Claude for very similar headlines
         self._recent_headline_hashes: dict[str, float] = {}  # hash -> timestamp
+        self._recent_headlines_semantic: dict[str, tuple[set, float]] = {}  # headline -> (ngrams, timestamp)
+
+        # Calibration cache — refreshed every 30 min from signal outcomes DB
+        self._calibration_cache: str = ""
+        self._calibration_ts: float = 0
+
+    def _get_calibration_context(self) -> str:
+        """Build calibration feedback from historical signal outcomes.
+        Tells Claude how well its previous confidence levels actually performed,
+        so it can auto-tune its confidence scale."""
+        now = time.time()
+        # Refresh every 30 minutes
+        if now - self._calibration_ts < 1800 and self._calibration_cache:
+            return self._calibration_cache
+        if not self._db:
+            return ""
+        try:
+            # Query calibration by confidence bucket at 1d checkpoint
+            buckets = {}
+            if hasattr(self._db, 'con'):
+                # SQLite path
+                rows = self._db.con.execute(
+                    "SELECT signal, confidence, pct_1d, outcome_1d "
+                    "FROM signal_outcomes WHERE pct_1d IS NOT NULL"
+                ).fetchall()
+                for signal, conf, pct, outcome in rows:
+                    bucket = (conf // 10) * 10  # 0-9, 10-19, ..., 90-100
+                    key = (signal, bucket)
+                    if key not in buckets:
+                        buckets[key] = {"total": 0, "wins": 0, "sum_pct": 0.0}
+                    buckets[key]["total"] += 1
+                    if outcome == "WIN":
+                        buckets[key]["wins"] += 1
+                    buckets[key]["sum_pct"] += pct
+            elif hasattr(self._db, 'client'):
+                # Supabase path
+                result = self._db.client.table("signal_outcomes").select(
+                    "signal, confidence, pct_1d, outcome_1d"
+                ).not_.is_("pct_1d", "null").execute()
+                for row in (result.data or []):
+                    bucket = (row["confidence"] // 10) * 10
+                    key = (row["signal"], bucket)
+                    if key not in buckets:
+                        buckets[key] = {"total": 0, "wins": 0, "sum_pct": 0.0}
+                    buckets[key]["total"] += 1
+                    if row["outcome_1d"] == "WIN":
+                        buckets[key]["wins"] += 1
+                    buckets[key]["sum_pct"] += row["pct_1d"]
+
+            if not buckets or sum(b["total"] for b in buckets.values()) < 10:
+                return ""  # Not enough data yet
+
+            lines = ["Historical confidence calibration (your past signals vs actual 1-day outcomes):"]
+            for (signal, bucket), data in sorted(buckets.items()):
+                if data["total"] < 3:
+                    continue  # Skip buckets with too few samples
+                win_rate = round(data["wins"] / data["total"] * 100, 1)
+                avg_ret = round(data["sum_pct"] / data["total"], 2)
+                expected = bucket + 5  # midpoint of bucket
+                drift = round(win_rate - expected, 1)
+                drift_str = f"{'overconfident' if drift < -5 else 'underconfident' if drift > 5 else 'calibrated'}"
+                lines.append(
+                    f"  {signal} {bucket}-{bucket+9}% confidence: actual win rate {win_rate}% "
+                    f"(avg return {'+' if avg_ret >= 0 else ''}{avg_ret}%) "
+                    f"[{data['total']} signals, {drift_str}]"
+                )
+            if len(lines) <= 1:
+                return ""
+            lines.append("Adjust your confidence scale based on this data. If you are overconfident in a range, lower your scores. If underconfident, raise them.")
+            self._calibration_cache = "\n".join(lines)
+            self._calibration_ts = now
+            print(f"  [Calibration] Updated with {sum(b['total'] for b in buckets.values())} signal outcomes")
+            return self._calibration_cache
+        except Exception as e:
+            print(f"  [Calibration] Error building calibration context: {e}")
+            return ""
 
     def _headline_sim_hash(self, headline: str) -> str:
         """Coarse hash: strip numbers/punctuation so 'NVDA up 5%' and 'NVDA up 3%' match."""
@@ -874,19 +953,60 @@ class ClaudeScorer:
         coarse = re.sub(r'\s+', ' ', coarse).strip()
         return hashlib.md5(coarse.encode()).hexdigest()
 
+    def _headline_ngrams(self, headline: str) -> set[str]:
+        """Extract word bigrams for semantic similarity comparison."""
+        words = re.sub(r'[^a-z\s]', '', headline.lower()).split()
+        # Remove common stop words that add noise to similarity
+        stops = {"the", "a", "an", "is", "are", "was", "were", "to", "of", "in", "for",
+                 "on", "at", "by", "and", "or", "as", "its", "it", "this", "that", "with"}
+        words = [w for w in words if w not in stops and len(w) > 1]
+        if len(words) < 2:
+            return set(words)
+        return {f"{words[i]}_{words[i+1]}" for i in range(len(words) - 1)} | set(words)
+
+    def _semantic_similarity(self, headline: str) -> tuple[float, str | None]:
+        """Check if headline is semantically similar to any recent headline.
+        Returns (max_similarity, matched_headline) using Jaccard similarity on word ngrams.
+        Threshold: 0.55 = same story from different source."""
+        ngrams = self._headline_ngrams(headline)
+        if not ngrams:
+            return 0.0, None
+        best_sim = 0.0
+        best_match = None
+        for cached_headline, (cached_ngrams, _ts) in self._recent_headlines_semantic.items():
+            if not cached_ngrams:
+                continue
+            intersection = len(ngrams & cached_ngrams)
+            union = len(ngrams | cached_ngrams)
+            sim = intersection / union if union > 0 else 0
+            if sim > best_sim:
+                best_sim = sim
+                best_match = cached_headline
+        return best_sim, best_match
+
     def _should_skip(self, headline: str, scored: ScoredEvent) -> str | None:
         """Return a skip reason string, or None if Claude should run."""
         # Skip listicles, opinion pieces, sponsored content, etc.
         if self.SKIP_PATTERNS.search(headline):
             return "headline matches skip pattern (opinion/listicle/ad)"
 
-        # Skip if we already called Claude for a very similar headline recently (30 min)
-        h = self._headline_sim_hash(headline)
         now = time.time()
-        # Clean old entries
+
+        # Clean old entries (30 min window)
         self._recent_headline_hashes = {k: v for k, v in self._recent_headline_hashes.items() if now - v < 1800}
+        self._recent_headlines_semantic = {
+            k: v for k, v in self._recent_headlines_semantic.items() if now - v[1] < 1800
+        }
+
+        # Skip if exact coarse hash match (existing behavior)
+        h = self._headline_sim_hash(headline)
         if h in self._recent_headline_hashes:
             return "similar headline already scored in last 30 min"
+
+        # Skip if semantically similar (new: catches same story from different sources)
+        sim, matched = self._semantic_similarity(headline)
+        if sim >= 0.55:
+            return f"semantic duplicate (similarity {sim:.0%}) of: {matched[:60]}..."
 
         # Skip UNKNOWN event type with low automated score (borderline, likely noise)
         if scored.event_type == EventType.UNKNOWN and scored.impact_score < 50:
@@ -1034,6 +1154,7 @@ Live market data (today's price action):
 Recent SEC Form 4 insider activity (last 14 days):
 {insider_context}
 {historical_ctx}
+{self._get_calibration_context()}
 
 Current automated scoring:
 - event_type: {scored.event_type.value}
@@ -1123,8 +1244,7 @@ Only include the tickers of companies, sectors, commodities, or ETFs that are ac
 Only correct other scoring fields where automated scoring is clearly wrong. Return valid JSON only."""
 
         try:
-            response = await asyncio.to_thread(
-                self.client.messages.create,
+            response = await self.client.messages.create(
                 model="claude-sonnet-4-6",
                 max_tokens=1024,
                 messages=[{"role": "user", "content": prompt}]
@@ -1153,6 +1273,7 @@ Only correct other scoring fields where automated scoring is clearly wrong. Retu
 
             # Cache this headline to avoid duplicate calls
             self._recent_headline_hashes[self._headline_sim_hash(headline)] = time.time()
+            self._recent_headlines_semantic[headline] = (self._headline_ngrams(headline), time.time())
 
             text = response.content[0].text.strip()
             if text.startswith("```"):
@@ -1240,6 +1361,17 @@ Only correct other scoring fields where automated scoring is clearly wrong. Retu
                 # Strip useless "no data" responses — frontend doesn't need them
                 if ic and "no recent insider" not in ic.lower() and "none" != ic.lower():
                     scored.insider_context = ic
+
+            # ── FIRST-PASS SCORE AGGREGATOR ──
+            # Enforce Rule 9 immediately: impact_score = avg(ticker_signals confidences)
+            # so all downstream logic uses the corrected score, not Claude's raw guess.
+            if scored.ticker_signals:
+                confs = [sig.get("confidence", 50) for sig in scored.ticker_signals.values()]
+                enforced_score = round(sum(confs) / len(confs))
+                if enforced_score != scored.impact_score:
+                    print(f"  [Rule9] First-pass score correction: {scored.impact_score} → {enforced_score} "
+                          f"(avg of {len(confs)} ticker confidences: {confs})")
+                    scored.impact_score = enforced_score
 
         except Exception as e:
             print(f"  [Claude] Scoring error: {e}")
@@ -1453,8 +1585,7 @@ Return ONLY JSON:
   "validation_note": one sentence on what the other sources add or change
 }}"""
         try:
-            response = await asyncio.to_thread(
-                self.client.messages.create,
+            response = await self.client.messages.create(
                 model="claude-haiku-4-5-20251001",  # Haiku: cheaper for simple validation
                 max_tokens=120,
                 messages=[{"role": "user", "content": prompt}]
@@ -3558,6 +3689,43 @@ class EntityExtractor:
                 )
             else:
                 self._alias_patterns[alias] = (None, ticker)  # plain substring
+
+        # ── spaCy NER (Pass 0) — catches entities the alias DB misses ──
+        self._nlp = None
+        try:
+            import spacy
+            self._nlp = spacy.load("en_core_web_sm", disable=["parser", "lemmatizer"])
+            # Add custom entity ruler for financial institutions / central banks
+            ruler = self._nlp.add_pipe("entity_ruler", before="ner")
+            financial_patterns = [
+                {"label": "ORG", "pattern": "the Fed"},
+                {"label": "ORG", "pattern": "Federal Reserve"},
+                {"label": "ORG", "pattern": "ECB"},
+                {"label": "ORG", "pattern": "European Central Bank"},
+                {"label": "ORG", "pattern": "PBOC"},
+                {"label": "ORG", "pattern": "Bank of Japan"},
+                {"label": "ORG", "pattern": "Bank of England"},
+                {"label": "ORG", "pattern": "SEC"},
+                {"label": "ORG", "pattern": "FTC"},
+                {"label": "ORG", "pattern": "DOJ"},
+                {"label": "ORG", "pattern": "OPEC"},
+                {"label": "ORG", "pattern": "OPEC+"},
+            ]
+            ruler.add_patterns(financial_patterns)
+            print("  [NER] spaCy en_core_web_sm loaded with financial entity ruler")
+        except (ImportError, OSError) as e:
+            print(f"  [NER] spaCy not available ({e}) — using keyword extraction only")
+
+        # Build reverse lookup: lowercase company name → ticker for NER resolution
+        self._company_to_ticker: dict[str, str] = {}
+        for ticker, info in self.db.tickers.items():
+            if "name" in info:
+                self._company_to_ticker[info["name"].lower()] = ticker
+        # Also add aliases as company names
+        for alias, ticker in self.db.aliases.items():
+            if len(alias) > 4:  # only longer aliases to avoid false matches
+                self._company_to_ticker[alias.lower()] = ticker
+
         # Sector keywords for macro events that don't mention specific companies.
         # Order matters: Crypto is checked first so "bitcoin" articles don't fall
         # through to Materials just because "gold" appears in comparison text.
@@ -3592,6 +3760,22 @@ class EntityExtractor:
         found_etfs = set()
         found_supply_chain = set()
         found_contagion = set()
+
+        # Pass 0: spaCy NER — catch company/org entities the alias DB misses
+        if self._nlp:
+            doc = self._nlp(headline)  # Only headline for speed — body is noisy
+            for ent in doc.ents:
+                if ent.label_ in ("ORG", "PRODUCT"):
+                    ent_lower = ent.text.lower()
+                    # Try direct company name → ticker resolution
+                    if ent_lower in self._company_to_ticker:
+                        found_tickers.add(self._company_to_ticker[ent_lower])
+                    else:
+                        # Fuzzy: check if any known company name starts with or contains the entity
+                        for name, ticker in self._company_to_ticker.items():
+                            if len(ent_lower) >= 5 and (ent_lower in name or name in ent_lower):
+                                found_tickers.add(ticker)
+                                break
 
         # Pass 1: Explicit ticker symbols ($VMC, NYSE:VMC, or (VMC))
         for match in self.ticker_pattern.finditer(text):

@@ -1,5 +1,5 @@
 import "./App.css";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback, memo } from "react";
 import Backtesting from "./Backtesting";
 
 /* ── helpers ─────────────────────────────────────────────────────────────── */
@@ -33,14 +33,15 @@ function ScoreRing({ score }) {
   const color = sevColor[severity];
   const r = 18, c = 2 * Math.PI * r, offset = c - (score / 100) * c;
   return (
-    <div style={{ position: "relative", width: 44, height: 44, flexShrink: 0 }}>
-      <svg width="44" height="44" style={{ transform: "rotate(-90deg)" }}>
+    <div style={{ position: "relative", width: 44, height: 44, flexShrink: 0 }}
+      role="img" aria-label={`Impact score ${score} out of 100, ${severity} severity`}>
+      <svg width="44" height="44" style={{ transform: "rotate(-90deg)" }} aria-hidden="true">
         <circle cx="22" cy="22" r={r} fill="none" stroke="#f0f0f5" strokeWidth="3" />
         <circle cx="22" cy="22" r={r} fill="none" stroke={color} strokeWidth="3"
           strokeDasharray={c} strokeDashoffset={offset} strokeLinecap="round"
           style={{ transition: "stroke-dashoffset 0.8s cubic-bezier(.4,0,.2,1)" }} />
       </svg>
-      <span style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center",
+      <span aria-hidden="true" style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center",
         fontSize: 13, fontWeight: 700, color, fontFamily: "'JetBrains Mono', monospace" }}>{score}</span>
     </div>
   );
@@ -54,21 +55,24 @@ function DirectionPill({ direction }) {
   };
   const c = cfg[direction] || cfg.NEUTRAL;
   return (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: 3, padding: "3px 10px",
+    <span role="status" aria-label={`Direction: ${c.label}`}
+      style={{ display: "inline-flex", alignItems: "center", gap: 3, padding: "3px 10px",
       borderRadius: 20, background: c.bg, color: c.color, fontSize: 12, fontWeight: 600 }}>
-      {c.icon} {c.label}
+      <span aria-hidden="true">{c.icon}</span> {c.label}
     </span>
   );
 }
 
 function SourceTag({ source, tier, wsSource }) {
+  const tierLabel = tier === 1 ? "tier 1" : tier === 2 ? "tier 2" : "tier 3";
   return (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12, color: "#8e8e93" }}>
-      <span style={{ width: 5, height: 5, borderRadius: "50%",
+    <span aria-label={`Source: ${source}, ${tierLabel}${wsSource ? ", WebSocket feed" : ""}`}
+      style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12, color: "#8e8e93" }}>
+      <span aria-hidden="true" style={{ width: 5, height: 5, borderRadius: "50%",
         background: tier === 1 ? "#f5a623" : tier === 2 ? "#c7c7cc" : "#e5e5ea",
         display: "inline-block" }} />
       {wsSource && (
-        <span style={{ fontSize: 9, fontWeight: 700, color: "#fff", background: "#0066ff",
+        <span aria-hidden="true" style={{ fontSize: 9, fontWeight: 700, color: "#fff", background: "#0066ff",
           padding: "1px 4px", borderRadius: 3, letterSpacing: 0.5 }}>WS</span>
       )}
       {source}
@@ -82,19 +86,23 @@ function TickerPill({ ticker, priceData }) {
   const rvol = pd.rvol;
   const rvolHigh = rvol != null && rvol >= 1.5;
   const rvolSurge = rvol != null && rvol >= 2.0;
+  const rvolLabel = rvolSurge ? "volume surge" : rvolHigh ? "high volume" : "normal volume";
+  const priceLabel = pd.price != null ? `, price $${pd.price.toFixed(2)}, ${up ? "up" : "down"} ${pd.change_pct}%` : "";
+  const volLabel = rvol != null ? `, relative volume ${rvol}x (${rvolLabel})` : "";
   return (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "4px 10px",
+    <span aria-label={`${ticker}${priceLabel}${volLabel}`}
+      style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "4px 10px",
       borderRadius: 10, background: rvolSurge ? "#fff3e0" : rvolHigh ? "#fef9e7" : "#f0f0f5",
       fontSize: 12, fontWeight: 600,
       border: rvolHigh ? "1px solid #f5a62333" : "none" }}>
       <span style={{ color: "#0066ff" }}>${ticker}</span>
       {pd.price != null && (
-        <span style={{ color: up ? "#1a9d4a" : "#d63031", fontFamily: "'JetBrains Mono', monospace", fontSize: 11 }}>
+        <span aria-hidden="true" style={{ color: up ? "#1a9d4a" : "#d63031", fontFamily: "'JetBrains Mono', monospace", fontSize: 11 }}>
           {pd.price.toFixed(2)} <span style={{ fontSize: 10 }}>{up ? "+" : ""}{pd.change_pct}%</span>
         </span>
       )}
       {rvol != null && (
-        <span style={{ fontSize: 10, color: rvolSurge ? "#e65100" : rvolHigh ? "#f5a623" : "#8e8e93",
+        <span aria-hidden="true" style={{ fontSize: 10, color: rvolSurge ? "#e65100" : rvolHigh ? "#f5a623" : "#8e8e93",
           fontFamily: "'JetBrains Mono', monospace", fontWeight: 700 }}
           title={`Relative Volume: ${rvol}x vs 30-day avg`}>
           {rvolHigh ? "\uD83D\uDD25" : ""}{rvol}x
@@ -122,9 +130,10 @@ function SignalBadge({ signal, confidence }) {
     ) : "Hold";
 
   return (
-    <div style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "6px 14px",
+    <div role="status" aria-label={`Signal: ${signal}, ${confidence}% confidence, ${label}`}
+      style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "6px 14px",
       borderRadius: 12, background: c.bg, border: `1px solid ${c.border}` }}>
-      <span style={{ fontSize: 8, color: c.color }}>{c.icon}</span>
+      <span aria-hidden="true" style={{ fontSize: 8, color: c.color }}>{c.icon}</span>
       <span style={{ fontSize: 13, fontWeight: 700, color: c.color }}>{signal}</span>
       <span style={{ fontSize: 12, color: c.color, opacity: 0.7 }}>{confidence}%</span>
       <span style={{ fontSize: 11, color: c.color, opacity: 0.6, fontWeight: 500 }}>{label}</span>
@@ -133,7 +142,7 @@ function SignalBadge({ signal, confidence }) {
 }
 
 /* ── event card ──────────────────────────────────────────────────────────── */
-function EventCard({ event, isNew, trackedPairs, onTrack, onUntrack }) {
+const EventCard = memo(function EventCard({ event, isNew, trackedPairs, onTrack, onUntrack }) {
   const severity = getSeverity(event.score);
   const [timeAgo, setTimeAgo] = useState(getTimeAgo(event.ts));
   const [hovered, setHovered] = useState(false);
@@ -168,7 +177,8 @@ function EventCard({ event, isNew, trackedPairs, onTrack, onUntrack }) {
   };
 
   return (
-    <div style={{
+    <article aria-label={`${severity} severity event: ${event.headline}. Score ${event.score}. ${event.direction}. ${event.buy_signal || "HOLD"} signal.`}
+    style={{
       background: "#ffffff",
       borderRadius: 16,
       padding: "20px 22px",
@@ -189,10 +199,11 @@ function EventCard({ event, isNew, trackedPairs, onTrack, onUntrack }) {
           {event.type.replace(/_/g, " ")}
         </span>
         {event.insider_activity && Object.keys(event.insider_activity).length > 0 && (
-          <span style={{ fontSize: 10, fontWeight: 700, color: "#5b21b6", background: "#ede9fe",
+          <span aria-label="SEC Form 4 insider activity detected"
+            style={{ fontSize: 10, fontWeight: 700, color: "#5b21b6", background: "#ede9fe",
             padding: "3px 8px", borderRadius: 6, border: "1px solid #c4b5fd",
             display: "inline-flex", alignItems: "center", gap: 3 }}>
-            {"\uD83D\uDCC4"} SEC Form 4
+            <span aria-hidden="true">{"\uD83D\uDCC4"}</span> SEC Form 4
           </span>
         )}
         <SourceTag source={event.source} tier={event.tier} wsSource={event.ws_source} />
@@ -315,10 +326,11 @@ function EventCard({ event, isNew, trackedPairs, onTrack, onUntrack }) {
             const sigColor = ts ? (ts.signal === "BUY" ? "#1a9d4a" : ts.signal === "SELL" ? "#e53935" : "#636366") : "#636366";
             const sigBg = ts ? (ts.signal === "BUY" ? "#e8f5e9" : ts.signal === "SELL" ? "#ffebee" : "#f0f0f5") : "#f0f0f5";
             return (
-              <span key={t} style={{ fontSize: 11, padding: "3px 8px", borderRadius: 8,
+              <span key={t} aria-label={`${t}: ${ts ? ts.signal : "no signal"}`}
+                style={{ fontSize: 11, padding: "3px 8px", borderRadius: 8,
                 background: sigBg, color: sigColor, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 4 }}>
                 {t}
-                {ts && <span style={{ fontSize: 9, opacity: 0.8 }}>{ts.signal === "BUY" ? "▲" : ts.signal === "SELL" ? "▼" : "—"}</span>}
+                {ts && <span aria-hidden="true" style={{ fontSize: 9, opacity: 0.8 }}>{ts.signal === "BUY" ? "▲" : ts.signal === "SELL" ? "▼" : "—"}</span>}
               </span>
             );
           })}
@@ -356,16 +368,18 @@ function EventCard({ event, isNew, trackedPairs, onTrack, onUntrack }) {
                     const isTradeable = isInTickers || isInCorrelated;
                     return (signal === "BUY" || signal === "SELL") && isTradeable ? (
                       isTracked ? (
-                        <button key={ticker} onClick={() => onUntrack(event.id, ticker)} style={{
+                        <button key={ticker} aria-label={`Stop tracking ${signal} signal for ${ticker}`}
+                          onClick={() => onUntrack(event.id, ticker)} style={{
                           padding: "5px 12px", borderRadius: 10, border: "1px solid #e5e5ea",
                           background: "#f9f9fb", color: "#8e8e93", fontSize: 11, fontWeight: 600,
                           cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4,
                           transition: "all 0.15s ease",
                         }}>
-                          <span style={{ color: "#1a9d4a" }}>&#10003;</span> Tracking ${ticker}
+                          <span aria-hidden="true" style={{ color: "#1a9d4a" }}>&#10003;</span> Tracking ${ticker}
                         </button>
                       ) : (
-                        <button key={ticker} onClick={() => onTrack(event.id, ticker, signal, confidence)} style={{
+                        <button key={ticker} aria-label={`Track ${signal} signal for ${ticker} at ${confidence}% confidence`}
+                          onClick={() => onTrack(event.id, ticker, signal, confidence)} style={{
                           padding: "5px 12px", borderRadius: 10,
                           border: `1px solid ${signal === "BUY" ? "#1a9d4a" : "#e53935"}`,
                           background: signal === "BUY" ? "#e8f5e9" : "#ffebee",
@@ -397,16 +411,18 @@ function EventCard({ event, isNew, trackedPairs, onTrack, onUntrack }) {
                     tp => tp.event_id === event.id && tp.ticker === ticker
                   );
                   return isTracked ? (
-                    <button key={ticker} onClick={() => onUntrack(event.id, ticker)} style={{
+                    <button key={ticker} aria-label={`Stop tracking ${ticker}`}
+                      onClick={() => onUntrack(event.id, ticker)} style={{
                       padding: "5px 12px", borderRadius: 10, border: "1px solid #e5e5ea",
                       background: "#f9f9fb", color: "#8e8e93", fontSize: 11, fontWeight: 600,
                       cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4,
                       transition: "all 0.15s ease",
                     }}>
-                      <span style={{ color: "#1a9d4a" }}>&#10003;</span> Tracking ${ticker}
+                      <span aria-hidden="true" style={{ color: "#1a9d4a" }}>&#10003;</span> Tracking ${ticker}
                     </button>
                   ) : (
-                    <button key={ticker} onClick={() => onTrack(event.id, ticker, event.buy_signal, event.buy_confidence)} style={{
+                    <button key={ticker} aria-label={`Track ${event.buy_signal} signal for ${ticker}`}
+                      onClick={() => onTrack(event.id, ticker, event.buy_signal, event.buy_confidence)} style={{
                       padding: "5px 12px", borderRadius: 10, border: "1px solid #0066ff",
                       background: "#eef4ff", color: "#0066ff", fontSize: 11, fontWeight: 600,
                       cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4,
@@ -472,9 +488,9 @@ function EventCard({ event, isNew, trackedPairs, onTrack, onUntrack }) {
           </span>
         )}
       </div>
-    </div>
+    </article>
   );
-}
+});
 
 /* ── sector heatmap ──────────────────────────────────────────────────────── */
 function SectorHeatmap({ events }) {
@@ -539,11 +555,12 @@ function MarketStateBar({ marketState }) {
   const vixPct = Math.min(100, Math.max(0, ((vix - 10) / 40) * 100));
 
   return (
-    <div style={{ background: "#ffffff", borderRadius: 14, padding: "14px 20px", marginBottom: 10,
+    <div role="region" aria-label="Market state" style={{ background: "#ffffff", borderRadius: 14, padding: "14px 20px", marginBottom: 10,
       boxShadow: "0 1px 4px rgba(0,0,0,0.04)", display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
 
       {/* VIX level + mini gauge */}
-      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+      <div aria-label={`VIX volatility index: ${vix.toFixed(1)}, regime: ${regime.label}`}
+        style={{ display: "flex", alignItems: "center", gap: 10 }}>
         <div>
           <div style={{ fontSize: 10, color: "#aeaeb2", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>VIX</div>
           <div style={{ fontSize: 22, fontWeight: 800, color: regime.color, fontFamily: "'JetBrains Mono', monospace", lineHeight: 1 }}>
@@ -551,8 +568,10 @@ function MarketStateBar({ marketState }) {
           </div>
         </div>
         {/* mini bar gauge */}
-        <div style={{ width: 60, height: 6, borderRadius: 3, background: "#f0f0f5", overflow: "hidden" }}>
-          <div style={{ width: `${vixPct}%`, height: "100%", borderRadius: 3,
+        <div role="progressbar" aria-valuenow={Math.round(vixPct)} aria-valuemin={0} aria-valuemax={100}
+          aria-label={`VIX gauge: ${Math.round(vixPct)}%`}
+          style={{ width: 60, height: 6, borderRadius: 3, background: "#f0f0f5", overflow: "hidden" }}>
+          <div aria-hidden="true" style={{ width: `${vixPct}%`, height: "100%", borderRadius: 3,
             background: vix < 15 ? "#1a9d4a" : vix < 20 ? "#0066ff" : vix < 30 ? "#f5a623" : "#eb4d3d",
             transition: "width 0.8s ease" }} />
         </div>
@@ -580,8 +599,9 @@ function MarketStateBar({ marketState }) {
       <div style={{ width: 1, height: 28, background: "#e5e5ea" }} />
 
       {/* Market status */}
-      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-        <span style={{ width: 7, height: 7, borderRadius: "50%",
+      <div role="status" aria-label={`Market ${marketState.market_open ? "open" : marketState.is_pre_market ? "pre-market" : "closed"}`}
+        style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <span aria-hidden="true" style={{ width: 7, height: 7, borderRadius: "50%",
           background: marketState.market_open ? "#1a9d4a" : marketState.is_pre_market ? "#f5a623" : "#aeaeb2",
           animation: marketState.market_open ? "pulse 1.5s ease-in-out infinite" : "none" }} />
         <span style={{ fontSize: 12, fontWeight: 600,
@@ -804,9 +824,10 @@ function FilterBar({ filter, setFilter, timeFilter, setTimeFilter, threshold, se
   return (
     <div style={{ background: "#ffffff", borderRadius: 14, padding: "14px 18px", marginBottom: 10,
       boxShadow: "0 1px 4px rgba(0,0,0,0.04)" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+      <div role="toolbar" aria-label="Event filters" style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
         {filters.map(f => (
-          <button key={f.key} onClick={() => setFilter(f.key)} style={{
+          <button key={f.key} aria-pressed={filter === f.key} aria-label={`Filter: ${f.label}`}
+            onClick={() => setFilter(f.key)} style={{
             padding: "6px 16px", borderRadius: 20, border: "none", cursor: "pointer",
             fontSize: 13, fontWeight: 600,
             background: filter === f.key
@@ -821,14 +842,16 @@ function FilterBar({ filter, setFilter, timeFilter, setTimeFilter, threshold, se
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
           <span style={{ fontSize: 12, color: "#aeaeb2", fontWeight: 500 }}>Min score</span>
           <input type="range" min={0} max={100} value={threshold} onChange={e => setThreshold(Number(e.target.value))}
+            aria-label={`Minimum score threshold: ${threshold}`}
             style={{ width: 80, accentColor: "#0066ff" }} />
           <span style={{ fontSize: 13, fontWeight: 700, color: "#0066ff", fontFamily: "'JetBrains Mono', monospace", minWidth: 24 }}>{threshold}</span>
         </div>
       </div>
-      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+      <div role="toolbar" aria-label="Time filters" style={{ display: "flex", alignItems: "center", gap: 6 }}>
         <span style={{ fontSize: 11, color: "#aeaeb2", fontWeight: 600, marginRight: 4 }}>Time</span>
         {timeFilters.map(t => (
-          <button key={t.key} onClick={() => setTimeFilter(t.key)} style={{
+          <button key={t.key} aria-pressed={timeFilter === t.key} aria-label={`Time filter: ${t.label}`}
+            onClick={() => setTimeFilter(t.key)} style={{
             padding: "4px 12px", borderRadius: 20, border: "none", cursor: "pointer",
             fontSize: 12, fontWeight: 600,
             background: timeFilter === t.key ? "#fff3e0" : "#f0f0f5",
@@ -837,10 +860,11 @@ function FilterBar({ filter, setFilter, timeFilter, setTimeFilter, threshold, se
           }}>{t.label}</button>
         ))}
       </div>
-      <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8 }}>
+      <div role="toolbar" aria-label="Horizon filters" style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8 }}>
         <span style={{ fontSize: 11, color: "#aeaeb2", fontWeight: 600, marginRight: 4 }}>Horizon</span>
         {horizonFilters.map(h => (
-          <button key={h.key} onClick={() => setHorizonFilter(h.key)} style={{
+          <button key={h.key} aria-pressed={horizonFilter === h.key} aria-label={`Horizon filter: ${h.label}`}
+            onClick={() => setHorizonFilter(h.key)} style={{
             padding: "4px 12px", borderRadius: 20, border: "none", cursor: "pointer",
             fontSize: 12, fontWeight: 600,
             background: horizonFilter === h.key ? "#e8f0fe" : "#f0f0f5",
@@ -933,7 +957,7 @@ export default function NYSEImpactScreener() {
     return () => { clearTimeout(reconnectTimerRef.current); if (wsRef.current) { wsRef.current.onclose = null; wsRef.current.close(); } };
   }, []);
 
-  const filtered = events.filter(e => {
+  const filtered = useMemo(() => events.filter(e => {
     if (e.score < threshold) return false;
     if (timeFilter !== "all") {
       const cutoff = { "1h": 3600, "4h": 14400, "24h": 86400 }[timeFilter] * 1000;
@@ -951,11 +975,11 @@ export default function NYSEImpactScreener() {
     if (filter === "bearish") return e.direction === "BEARISH";
     if (filter === "buy") return e.buy_signal === "BUY";
     return true;
-  });
+  }), [events, threshold, timeFilter, horizonFilter, filter]);
 
   const trackedPairs = signalData?.tracked_ids || [];
 
-  const handleTrack = (eventId, ticker, signal, confidence) => {
+  const handleTrack = useCallback((eventId, ticker, signal, confidence) => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({
         action: "track_signal",
@@ -965,9 +989,9 @@ export default function NYSEImpactScreener() {
         confidence,
       }));
     }
-  };
+  }, []);
 
-  const handleUntrack = (eventId, ticker) => {
+  const handleUntrack = useCallback((eventId, ticker) => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({
         action: "untrack_signal",
@@ -975,13 +999,13 @@ export default function NYSEImpactScreener() {
         ticker,
       }));
     }
-  };
+  }, []);
 
   return (
     <div style={{ minHeight: "100vh", background: "#f2f2f7", paddingBottom: 60 }}>
 
       {/* ── header ───────────────────────────────────────────────────── */}
-      <div style={{ background: "#ffffff", padding: "20px 28px", marginBottom: 10,
+      <header role="banner" style={{ background: "#ffffff", padding: "20px 28px", marginBottom: 10,
         boxShadow: "0 1px 4px rgba(0,0,0,0.04)", position: "sticky", top: 0, zIndex: 100 }}>
         <div style={{ maxWidth: 1100, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
@@ -994,9 +1018,11 @@ export default function NYSEImpactScreener() {
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             {/* live indicator */}
-            <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 14px",
+            <div role="status" aria-live="polite"
+              aria-label={`Connection status: ${wsStatus === "live" ? "Live" : wsStatus === "disconnected" ? "Offline" : "Connecting"}`}
+              style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 14px",
               borderRadius: 20, background: wsStatus === "live" ? "#e8f9ef" : wsStatus === "disconnected" ? "#fdeaea" : "#fff3e0" }}>
-              <span style={{ width: 7, height: 7, borderRadius: "50%",
+              <span aria-hidden="true" style={{ width: 7, height: 7, borderRadius: "50%",
                 background: wsStatus === "live" ? "#1a9d4a" : wsStatus === "disconnected" ? "#d63031" : "#f5a623",
                 animation: wsStatus === "live" ? "pulse 1.5s ease-in-out infinite" : "none" }} />
               <span style={{ fontSize: 12, fontWeight: 600,
@@ -1007,16 +1033,18 @@ export default function NYSEImpactScreener() {
             {/* download */}
             {["CSV", "JSON"].map(fmt => (
               <a key={fmt} href={`http://localhost:8766/download/${fmt.toLowerCase()}`} download
+                aria-label={`Download events as ${fmt}`}
                 style={{ padding: "7px 16px", borderRadius: 10, border: "1px solid #e5e5ea",
                   background: "#ffffff", color: "#636366", fontSize: 12, fontWeight: 600,
                   cursor: "pointer", textDecoration: "none", transition: "all 0.15s ease" }}
                 onMouseEnter={e => { e.currentTarget.style.background = "#f0f0f5"; }}
                 onMouseLeave={e => { e.currentTarget.style.background = "#ffffff"; }}>
-                ↓ {fmt}
+                <span aria-hidden="true">↓</span> {fmt}
               </a>
             ))}
             {/* backtesting */}
-            <button onClick={() => setView(v => v === "screener" ? "backtesting" : "screener")} style={{
+            <button aria-label={view === "backtesting" ? "Switch to live feed" : "Switch to backtesting dashboard"}
+              onClick={() => setView(v => v === "screener" ? "backtesting" : "screener")} style={{
               padding: "7px 18px", borderRadius: 10, border: view === "backtesting" ? "none" : "1px solid #5856d6", cursor: "pointer",
               background: view === "backtesting" ? "#5856d6" : "#f3f2ff",
               color: view === "backtesting" ? "#ffffff" : "#5856d6",
@@ -1025,7 +1053,8 @@ export default function NYSEImpactScreener() {
               {view === "backtesting" ? "← Live Feed" : "⏱ Backtesting"}
             </button>
             {/* pause */}
-            <button onClick={() => setIsLive(l => !l)} style={{
+            <button aria-label={isLive ? "Pause live feed" : "Resume live feed"} aria-pressed={!isLive}
+              onClick={() => setIsLive(l => !l)} style={{
               padding: "7px 18px", borderRadius: 10, border: "none", cursor: "pointer",
               background: isLive ? "#f0f0f5" : "#0066ff", color: isLive ? "#636366" : "#ffffff",
               fontSize: 12, fontWeight: 600, transition: "all 0.15s ease",
@@ -1034,9 +1063,10 @@ export default function NYSEImpactScreener() {
             </button>
           </div>
         </div>
-      </div>
+      </header>
 
       {/* ── content ──────────────────────────────────────────────────── */}
+      <main>
       {view === "backtesting" ? (
         <Backtesting onBack={() => setView("screener")} />
       ) : (
@@ -1050,7 +1080,7 @@ export default function NYSEImpactScreener() {
             horizonFilter={horizonFilter} setHorizonFilter={setHorizonFilter} />
 
           {/* feed */}
-          <div ref={feedRef}>
+          <div ref={feedRef} role="feed" aria-label="Market events feed" aria-live="polite">
             {filtered.length === 0 ? (
               <div style={{ background: "#ffffff", borderRadius: 16, padding: 60, textAlign: "center",
                 boxShadow: "0 1px 4px rgba(0,0,0,0.04)" }}>
@@ -1067,9 +1097,10 @@ export default function NYSEImpactScreener() {
           </div>
         </div>
       )}
+      </main>
 
       {/* ── footer ───────────────────────────────────────────────────── */}
-      <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, padding: "10px 24px",
+      <footer aria-label="Pipeline status" style={{ position: "fixed", bottom: 0, left: 0, right: 0, padding: "10px 24px",
         background: "rgba(255,255,255,0.85)", backdropFilter: "blur(20px)", borderTop: "1px solid #e5e5ea",
         display: "flex", justifyContent: "center", gap: 24 }}>
         <span style={{ fontSize: 11, color: "#aeaeb2" }}>
@@ -1083,7 +1114,7 @@ export default function NYSEImpactScreener() {
         <span style={{ fontSize: 11, color: "#aeaeb2", fontFamily: "'JetBrains Mono', monospace" }}>
           {events.length > 0 ? `avg ${(events.reduce((s, e) => s + (e.latency || 0), 0) / events.length).toFixed(0)}ms` : "–"}
         </span>
-      </div>
+      </footer>
     </div>
   );
 }
