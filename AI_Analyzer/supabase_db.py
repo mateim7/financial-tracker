@@ -116,25 +116,29 @@ class SupabaseDatabase:
     def insert(self, event):
         """Insert a scored event. Mirrors EventDatabase.insert()."""
         try:
+            def _native(v):
+                """Convert numpy/torch scalars to Python natives for JSON."""
+                return v.item() if hasattr(v, 'item') else v
+
             data = {
                 "event_id": event.event_id,
-                "timestamp": event.timestamp,
+                "timestamp": _native(event.timestamp),
                 "headline": event.headline,
                 "source": event.source,
-                "source_tier": event.source_tier,
+                "source_tier": _native(event.source_tier),
                 "event_type": event.event_type.value,
                 "direction": event.direction.value,
-                "sentiment": event.sentiment,
-                "impact_score": event.impact_score,
+                "sentiment": _native(event.sentiment),
+                "impact_score": _native(event.impact_score),
                 "urgency": event.urgency.value,
                 "brief": event.brief,
                 "buy_signal": event.buy_signal,
-                "buy_confidence": event.buy_confidence,
+                "buy_confidence": _native(event.buy_confidence),
                 "affected_tickers": json.dumps(event.affected_tickers),
                 "affected_sectors": json.dumps(event.affected_sectors),
                 "affected_etfs": json.dumps(event.affected_etfs),
                 "stock_availability": json.dumps(event.stock_availability),
-                "latency_ms": event.latency_ms,
+                "latency_ms": _native(event.latency_ms),
             }
             self.client.table("events").upsert(data).execute()
         except Exception as e:

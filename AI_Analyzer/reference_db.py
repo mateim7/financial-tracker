@@ -1,4 +1,11 @@
+"""
+NYSE Reference Database for the NYSE Impact Screener.
+"""
+
 from typing import Optional
+
+from market_state import LiveMarketState
+
 
 class NYSEReferenceDB:
     """
@@ -14,7 +21,7 @@ class NYSEReferenceDB:
 
     def __init__(self):
         self.tickers: dict[str, dict] = {
-            # "" SEMICONDUCTORS """"""""""""""""""""""""""""""""""""""""""""""
+            # ── SEMICONDUCTORS ──────────────────────────────────────────────
             "NVDA": {"name": "NVIDIA", "sector": "Semiconductors", "mcap": "mega", "etf": "SMH",
                      "sub_sector": "GPU/AI Chips", "beta_30d": 1.8},
             "AMD":  {"name": "Advanced Micro Devices", "sector": "Semiconductors", "mcap": "large", "etf": "SMH",
@@ -42,7 +49,7 @@ class NYSEReferenceDB:
             "MRVL": {"name": "Marvell Technology", "sector": "Semiconductors", "mcap": "large", "etf": "SMH",
                      "sub_sector": "Data Infrastructure", "beta_30d": 1.6},
 
-            # "" ENERGY " Upstream (E&P) """"""""""""""""""""""""""""""""""""
+            # ── ENERGY — Upstream (E&P) ────────────────────────────────────
             "XOM":  {"name": "Exxon Mobil", "sector": "Energy", "mcap": "mega", "etf": "XLE",
                      "sub_sector": "Integrated", "beta_30d": 0.9},
             "CVX":  {"name": "Chevron", "sector": "Energy", "mcap": "mega", "etf": "XLE",
@@ -55,19 +62,19 @@ class NYSEReferenceDB:
                      "sub_sector": "E&P Permian", "beta_30d": 1.3},
             "OXY":  {"name": "Occidental Petroleum", "sector": "Energy", "mcap": "large", "etf": "XOP",
                      "sub_sector": "E&P", "beta_30d": 1.5},
-            # "" Energy " Midstream """""""""""""""""""""""""""""""""""""""""
+            # ── Energy — Midstream ─────────────────────────────────────────
             "WMB":  {"name": "Williams Companies", "sector": "Energy", "mcap": "large", "etf": "AMLP",
                      "sub_sector": "Midstream/Pipelines", "beta_30d": 0.8},
             "KMI":  {"name": "Kinder Morgan", "sector": "Energy", "mcap": "large", "etf": "AMLP",
                      "sub_sector": "Midstream/Pipelines", "beta_30d": 0.7},
             "ET":   {"name": "Energy Transfer", "sector": "Energy", "mcap": "large", "etf": "AMLP",
                      "sub_sector": "Midstream/Pipelines", "beta_30d": 0.9},
-            # "" Energy " Services """"""""""""""""""""""""""""""""""""""""""
+            # ── Energy — Services ──────────────────────────────────────────
             "SLB":  {"name": "Schlumberger", "sector": "Energy", "mcap": "large", "etf": "OIH",
                      "sub_sector": "Oilfield Services", "beta_30d": 1.3},
             "HAL":  {"name": "Halliburton", "sector": "Energy", "mcap": "large", "etf": "OIH",
                      "sub_sector": "Oilfield Services", "beta_30d": 1.4},
-            # "" Energy " Renewables """"""""""""""""""""""""""""""""""""""""
+            # ── Energy — Renewables ────────────────────────────────────────
             "NEE":  {"name": "NextEra Energy", "sector": "Utilities", "mcap": "mega", "etf": "XLU",
                      "sub_sector": "Renewable Utilities", "beta_30d": 0.7},
             "ENPH": {"name": "Enphase Energy", "sector": "Energy", "mcap": "mid", "etf": "TAN",
@@ -75,7 +82,7 @@ class NYSEReferenceDB:
             "FSLR": {"name": "First Solar", "sector": "Energy", "mcap": "mid", "etf": "TAN",
                      "sub_sector": "Solar", "beta_30d": 1.8},
 
-            # "" FINANCIALS """""""""""""""""""""""""""""""""""""""""""""""""
+            # ── FINANCIALS ─────────────────────────────────────────────────
             "JPM":  {"name": "JPMorgan Chase", "sector": "Financials", "mcap": "mega", "etf": "XLF",
                      "sub_sector": "Money Center Banks", "beta_30d": 1.1},
             "GS":   {"name": "Goldman Sachs", "sector": "Financials", "mcap": "mega", "etf": "XLF",
@@ -97,7 +104,7 @@ class NYSEReferenceDB:
             "BLK":  {"name": "BlackRock", "sector": "Financials", "mcap": "large", "etf": "XLF",
                      "sub_sector": "Asset Management", "beta_30d": 1.1},
 
-            # "" HEALTHCARE / PHARMA / BIOTECH """"""""""""""""""""""""""""""
+            # ── HEALTHCARE / PHARMA / BIOTECH ──────────────────────────────
             "JNJ":  {"name": "Johnson & Johnson", "sector": "Healthcare", "mcap": "mega", "etf": "XLV",
                      "sub_sector": "Diversified Pharma", "beta_30d": 0.6},
             "PFE":  {"name": "Pfizer", "sector": "Healthcare", "mcap": "large", "etf": "XLV",
@@ -117,7 +124,7 @@ class NYSEReferenceDB:
             "GILD": {"name": "Gilead Sciences", "sector": "Healthcare", "mcap": "large", "etf": "IBB",
                      "sub_sector": "Biotech", "beta_30d": 0.6},
 
-            # "" DEFENSE / AEROSPACE """"""""""""""""""""""""""""""""""""""""
+            # ── DEFENSE / AEROSPACE ────────────────────────────────────────
             "LMT":  {"name": "Lockheed Martin", "sector": "Defense", "mcap": "large", "etf": "ITA",
                      "sub_sector": "Defense Prime", "beta_30d": 0.7},
             "RTX":  {"name": "RTX (Raytheon)", "sector": "Defense", "mcap": "large", "etf": "ITA",
@@ -129,7 +136,7 @@ class NYSEReferenceDB:
             "BA":   {"name": "Boeing", "sector": "Defense", "mcap": "large", "etf": "ITA",
                      "sub_sector": "Commercial Aero/Defense", "beta_30d": 1.4},
 
-            # "" TECHNOLOGY """""""""""""""""""""""""""""""""""""""""""""""""
+            # ── TECHNOLOGY ─────────────────────────────────────────────────
             "IBM":  {"name": "IBM", "sector": "Technology", "mcap": "large", "etf": "XLK",
                      "sub_sector": "Enterprise IT", "beta_30d": 0.9},
             "CRM":  {"name": "Salesforce", "sector": "Technology", "mcap": "large", "etf": "XLK",
@@ -141,7 +148,7 @@ class NYSEReferenceDB:
             "PLTR": {"name": "Palantir", "sector": "Technology", "mcap": "large", "etf": "XLK",
                      "sub_sector": "AI/Data Analytics", "beta_30d": 2.1},
 
-            # "" INDUSTRIALS """"""""""""""""""""""""""""""""""""""""""""""""
+            # ── INDUSTRIALS ────────────────────────────────────────────────
             "CAT":  {"name": "Caterpillar", "sector": "Industrials", "mcap": "large", "etf": "XLI",
                      "sub_sector": "Heavy Equipment", "beta_30d": 1.1},
             "DE":   {"name": "Deere & Company", "sector": "Industrials", "mcap": "large", "etf": "XLI",
@@ -157,7 +164,7 @@ class NYSEReferenceDB:
             "FDX":  {"name": "FedEx", "sector": "Transportation", "mcap": "large", "etf": "IYT",
                      "sub_sector": "Logistics", "beta_30d": 1.2},
 
-            # "" CONSUMER STAPLES """""""""""""""""""""""""""""""""""""""""""
+            # ── CONSUMER STAPLES ───────────────────────────────────────────
             "WMT":  {"name": "Walmart", "sector": "Consumer Staples", "mcap": "mega", "etf": "XLP",
                      "sub_sector": "Big Box Retail", "beta_30d": 0.5},
             "KO":   {"name": "Coca-Cola", "sector": "Consumer Staples", "mcap": "mega", "etf": "XLP",
@@ -169,7 +176,7 @@ class NYSEReferenceDB:
             "COST": {"name": "Costco", "sector": "Consumer Staples", "mcap": "mega", "etf": "XLP",
                      "sub_sector": "Warehouse Retail", "beta_30d": 0.7},
 
-            # "" CONSUMER DISCRETIONARY """""""""""""""""""""""""""""""""""""
+            # ── CONSUMER DISCRETIONARY ─────────────────────────────────────
             "NKE":  {"name": "Nike", "sector": "Consumer Disc.", "mcap": "large", "etf": "XLY",
                      "sub_sector": "Apparel/Footwear", "beta_30d": 1.1},
             "HD":   {"name": "Home Depot", "sector": "Consumer Disc.", "mcap": "mega", "etf": "XLY",
@@ -178,14 +185,13 @@ class NYSEReferenceDB:
                      "sub_sector": "QSR", "beta_30d": 0.6},
             "SBUX": {"name": "Starbucks", "sector": "Consumer Disc.", "mcap": "large", "etf": "XLY",
                      "sub_sector": "QSR/Coffee", "beta_30d": 0.9},
-            # "" Consumer Disc. " Specialty Retail / Beauty """"""""""""""""
             "ULTA": {"name": "Ulta Beauty", "sector": "Consumer Disc.", "mcap": "large", "etf": "XLY",
                      "sub_sector": "Specialty Beauty Retail", "beta_30d": 1.3},
             "ELF":  {"name": "e.l.f. Beauty", "sector": "Consumer Disc.", "mcap": "mid", "etf": "XLY",
                      "sub_sector": "Specialty Beauty", "beta_30d": 1.8},
             "COTY": {"name": "Coty", "sector": "Consumer Staples", "mcap": "mid", "etf": "XLP",
                      "sub_sector": "Beauty/Personal Care", "beta_30d": 1.4},
-            "EL":   {"name": "Este Lauder", "sector": "Consumer Staples", "mcap": "large", "etf": "XLP",
+            "EL":   {"name": "Estée Lauder", "sector": "Consumer Staples", "mcap": "large", "etf": "XLP",
                      "sub_sector": "Beauty/Personal Care", "beta_30d": 1.2},
             "TGT":  {"name": "Target", "sector": "Consumer Disc.", "mcap": "large", "etf": "XLY",
                      "sub_sector": "Big Box Retail", "beta_30d": 1.0},
@@ -202,7 +208,7 @@ class NYSEReferenceDB:
             "DIS":  {"name": "Walt Disney", "sector": "Communication", "mcap": "large", "etf": "XLC",
                      "sub_sector": "Media/Entertainment", "beta_30d": 1.1},
 
-            # "" UTILITIES """"""""""""""""""""""""""""""""""""""""""""""""""
+            # ── UTILITIES ──────────────────────────────────────────────────
             "DUK":  {"name": "Duke Energy", "sector": "Utilities", "mcap": "large", "etf": "XLU",
                      "sub_sector": "Regulated Electric", "beta_30d": 0.4},
             "SO":   {"name": "Southern Company", "sector": "Utilities", "mcap": "large", "etf": "XLU",
@@ -212,7 +218,7 @@ class NYSEReferenceDB:
             "VST":  {"name": "Vistra", "sector": "Utilities", "mcap": "large", "etf": "XLU",
                      "sub_sector": "Power Generation/Nuclear", "beta_30d": 1.6},
 
-            # "" REITs """"""""""""""""""""""""""""""""""""""""""""""""""""""
+            # ── REITs ──────────────────────────────────────────────────────
             "AMT":  {"name": "American Tower", "sector": "REITs", "mcap": "large", "etf": "VNQ",
                      "sub_sector": "Cell Tower REITs", "beta_30d": 0.8},
             "PLD":  {"name": "Prologis", "sector": "REITs", "mcap": "mega", "etf": "VNQ",
@@ -222,7 +228,7 @@ class NYSEReferenceDB:
             "SPG":  {"name": "Simon Property Group", "sector": "REITs", "mcap": "large", "etf": "VNQ",
                      "sub_sector": "Retail REITs", "beta_30d": 1.2},
 
-            # "" MATERIALS / MINING """""""""""""""""""""""""""""""""""""""""
+            # ── MATERIALS / MINING ─────────────────────────────────────────
             "FCX":  {"name": "Freeport-McMoRan", "sector": "Materials", "mcap": "large", "etf": "XLB",
                      "sub_sector": "Copper/Gold Mining", "beta_30d": 1.5},
             "NEM":  {"name": "Newmont Mining", "sector": "Materials", "mcap": "large", "etf": "GDX",
@@ -234,7 +240,7 @@ class NYSEReferenceDB:
             "LIN":  {"name": "Linde", "sector": "Materials", "mcap": "mega", "etf": "XLB",
                      "sub_sector": "Industrial Gases", "beta_30d": 0.7},
 
-            # "" TELECOM """"""""""""""""""""""""""""""""""""""""""""""""""""
+            # ── TELECOM ────────────────────────────────────────────────────
             "T":    {"name": "AT&T", "sector": "Telecom", "mcap": "large", "etf": "XLC",
                      "sub_sector": "Telecom/Wireless", "beta_30d": 0.7},
             "VZ":   {"name": "Verizon", "sector": "Telecom", "mcap": "large", "etf": "XLC",
@@ -242,7 +248,7 @@ class NYSEReferenceDB:
             "TMUS": {"name": "T-Mobile", "sector": "Telecom", "mcap": "large", "etf": "XLC",
                      "sub_sector": "Telecom/Wireless", "beta_30d": 0.7},
 
-            # "" MEGA-CAP TECH (Big 7) """""""""""""""""""""""""""""""""""""""
+            # ── MEGA-CAP TECH (Big 7) ───────────────────────────────────────
             "AAPL": {"name": "Apple", "sector": "Technology", "mcap": "mega", "etf": "XLK",
                      "sub_sector": "Consumer Electronics/Software", "beta_30d": 1.2},
             "MSFT": {"name": "Microsoft", "sector": "Technology", "mcap": "mega", "etf": "XLK",
@@ -260,7 +266,7 @@ class NYSEReferenceDB:
             "TSLA": {"name": "Tesla", "sector": "Consumer Disc.", "mcap": "mega", "etf": "XLY",
                      "sub_sector": "EV/Autonomous", "beta_30d": 2.0},
 
-            # "" MORE TECHNOLOGY / SOFTWARE """"""""""""""""""""""""""""""""""
+            # ── MORE TECHNOLOGY / SOFTWARE ──────────────────────────────────
             "ADBE": {"name": "Adobe", "sector": "Technology", "mcap": "large", "etf": "XLK",
                      "sub_sector": "Creative/AI Software", "beta_30d": 1.3},
             "INTU": {"name": "Intuit", "sector": "Technology", "mcap": "large", "etf": "XLK",
@@ -282,7 +288,7 @@ class NYSEReferenceDB:
             "SHOP": {"name": "Shopify", "sector": "Technology", "mcap": "large", "etf": "IGV",
                      "sub_sector": "E-Commerce Platform", "beta_30d": 1.8},
 
-            # "" CYBERSECURITY """""""""""""""""""""""""""""""""""""""""""""""
+            # ── CYBERSECURITY ───────────────────────────────────────────────
             "PANW": {"name": "Palo Alto Networks", "sector": "Technology", "mcap": "large", "etf": "CIBR",
                      "sub_sector": "Cybersecurity", "beta_30d": 1.4},
             "CRWD": {"name": "CrowdStrike", "sector": "Technology", "mcap": "large", "etf": "CIBR",
@@ -294,7 +300,7 @@ class NYSEReferenceDB:
             "S":    {"name": "SentinelOne", "sector": "Technology", "mcap": "mid", "etf": "CIBR",
                      "sub_sector": "Cybersecurity/AI", "beta_30d": 1.8},
 
-            # "" CLOUD / DATA """"""""""""""""""""""""""""""""""""""""""""""""
+            # ── CLOUD / DATA ────────────────────────────────────────────────
             "SNOW": {"name": "Snowflake", "sector": "Technology", "mcap": "large", "etf": "WCLD",
                      "sub_sector": "Cloud Data Platform", "beta_30d": 1.7},
             "DDOG": {"name": "Datadog", "sector": "Technology", "mcap": "large", "etf": "WCLD",
@@ -310,7 +316,7 @@ class NYSEReferenceDB:
             "ROKU": {"name": "Roku", "sector": "Communication", "mcap": "mid", "etf": "XLC",
                      "sub_sector": "Streaming Platform", "beta_30d": 2.0},
 
-            # "" CRYPTO-ADJACENT """""""""""""""""""""""""""""""""""""""""""""
+            # ── CRYPTO-ADJACENT ─────────────────────────────────────────────
             "COIN": {"name": "Coinbase", "sector": "Financials", "mcap": "large", "etf": "BKCH",
                      "sub_sector": "Crypto Exchange", "beta_30d": 3.0},
             "MSTR": {"name": "MicroStrategy", "sector": "Technology", "mcap": "large", "etf": "BKCH",
@@ -322,7 +328,7 @@ class NYSEReferenceDB:
             "HOOD": {"name": "Robinhood", "sector": "Financials", "mcap": "mid", "etf": "BKCH",
                      "sub_sector": "Retail Brokerage/Crypto", "beta_30d": 2.5},
 
-            # "" FINTECH """""""""""""""""""""""""""""""""""""""""""""""""""""
+            # ── FINTECH ─────────────────────────────────────────────────────
             "PYPL": {"name": "PayPal", "sector": "Financials", "mcap": "large", "etf": "XLF",
                      "sub_sector": "Digital Payments", "beta_30d": 1.4},
             "SQ":   {"name": "Block (Square)", "sector": "Financials", "mcap": "large", "etf": "XLF",
@@ -338,7 +344,7 @@ class NYSEReferenceDB:
             "LYFT": {"name": "Lyft", "sector": "Technology", "mcap": "mid", "etf": "XLK",
                      "sub_sector": "Ride-Sharing", "beta_30d": 2.0},
 
-            # "" BIOTECH / PHARMA (additional) """""""""""""""""""""""""""""""
+            # ── BIOTECH / PHARMA (additional) ───────────────────────────────
             "MRNA": {"name": "Moderna", "sector": "Healthcare", "mcap": "large", "etf": "IBB",
                      "sub_sector": "mRNA Biotech", "beta_30d": 1.8},
             "BNTX": {"name": "BioNTech", "sector": "Healthcare", "mcap": "large", "etf": "IBB",
@@ -350,7 +356,7 @@ class NYSEReferenceDB:
             "NVO":  {"name": "Novo Nordisk", "sector": "Healthcare", "mcap": "mega", "etf": "XLV",
                      "sub_sector": "Diabetes/GLP-1 Pharma", "beta_30d": 0.8},
 
-            # "" EVs / AUTOS """"""""""""""""""""""""""""""""""""""""""""""""""
+            # ── EVs / AUTOS ──────────────────────────────────────────────────
             "GM":   {"name": "General Motors", "sector": "Consumer Disc.", "mcap": "large", "etf": "XLY",
                      "sub_sector": "Autos/EV", "beta_30d": 1.3},
             "F":    {"name": "Ford Motor", "sector": "Consumer Disc.", "mcap": "large", "etf": "XLY",
@@ -363,132 +369,82 @@ class NYSEReferenceDB:
                      "sub_sector": "E&P", "beta_30d": 1.4},
         }
 
-        # "" ALIAS RESOLUTION: Common Names ' Tickers """"""""""""""""""""""
+        # ── ALIAS RESOLUTION: Common Names → Tickers ──────────────────────
         self.aliases: dict[str, str] = {
-            # Semiconductors
             "nvidia": "NVDA", "nvda": "NVDA", "jensen huang": "NVDA",
             "amd": "AMD", "advanced micro": "AMD", "lisa su": "AMD",
             "intel": "INTC", "pat gelsinger": "INTC",
             "tsmc": "TSM", "taiwan semi": "TSM", "taiwan semiconductor": "TSM",
             "broadcom": "AVGO", "hock tan": "AVGO",
-            "qualcomm": "QCOM",
-            "asml": "ASML",
-            "micron": "MU",
+            "qualcomm": "QCOM", "asml": "ASML", "micron": "MU",
             "lam research": "LRCX", "lam": "LRCX",
-            "applied materials": "AMAT",
-            "texas instruments": "TXN",
+            "applied materials": "AMAT", "texas instruments": "TXN",
             "arm": "ARM", "arm holdings": "ARM", "softbank arm": "ARM",
             "marvell": "MRVL",
-            # Energy
             "exxon": "XOM", "exxon mobil": "XOM", "exxonmobil": "XOM",
-            "chevron": "CVX",
-            "conocophillips": "COP", "conoco": "COP",
+            "chevron": "CVX", "conocophillips": "COP", "conoco": "COP",
             "eog": "EOG", "eog resources": "EOG",
             "pioneer": "PXD", "pioneer natural": "PXD",
             "occidental": "OXY", "oxy": "OXY",
             "williams": "WMB", "williams companies": "WMB",
-            "kinder morgan": "KMI",
-            "energy transfer": "ET",
-            "schlumberger": "SLB",
-            "halliburton": "HAL",
+            "kinder morgan": "KMI", "energy transfer": "ET",
+            "schlumberger": "SLB", "halliburton": "HAL",
             "nextera": "NEE", "nextera energy": "NEE",
-            "enphase": "ENPH",
-            "first solar": "FSLR",
-            # Financials
+            "enphase": "ENPH", "first solar": "FSLR",
             "jpmorgan": "JPM", "jp morgan": "JPM", "chase": "JPM", "jamie dimon": "JPM",
             "goldman": "GS", "goldman sachs": "GS", "david solomon": "GS",
             "bank of america": "BAC", "bofa": "BAC",
-            "morgan stanley": "MS",
-            "citigroup": "C", "citi": "C",
+            "morgan stanley": "MS", "citigroup": "C", "citi": "C",
             "wells fargo": "WFC",
             "berkshire": "BRK.B", "berkshire hathaway": "BRK.B", "warren buffett": "BRK.B", "buffett": "BRK.B",
-            "visa": "V",
-            "mastercard": "MA",
+            "visa": "V", "mastercard": "MA",
             "blackrock": "BLK", "larry fink": "BLK",
-            # Regional Banks
             "columbia banking": "COLB", "columbia banking system": "COLB",
             "zions": "ZION", "zions bancorporation": "ZION", "zions bancorp": "ZION",
             "regions financial": "RF", "regions bank": "RF",
             "keycorp": "KEY", "key bank": "KEY", "keybank": "KEY",
-            "comerica": "CMA",
-            "first republic": "FRC",
-            "western alliance": "WAL",
-            "east west bancorp": "EWBC",
-            # Healthcare
+            "comerica": "CMA", "first republic": "FRC",
+            "western alliance": "WAL", "east west bancorp": "EWBC",
             "johnson & johnson": "JNJ", "j&j": "JNJ",
-            "pfizer": "PFE",
-            "unitedhealth": "UNH", "united health": "UNH",
+            "pfizer": "PFE", "unitedhealth": "UNH", "united health": "UNH",
             "eli lilly": "LLY", "lilly": "LLY",
-            "abbvie": "ABBV",
-            "merck": "MRK",
-            "thermo fisher": "TMO",
-            "amgen": "AMGN",
-            "gilead": "GILD",
-            # Defense
+            "abbvie": "ABBV", "merck": "MRK", "thermo fisher": "TMO",
+            "amgen": "AMGN", "gilead": "GILD",
             "lockheed": "LMT", "lockheed martin": "LMT",
             "raytheon": "RTX", "rtx": "RTX",
             "northrop": "NOC", "northrop grumman": "NOC",
-            "general dynamics": "GD",
-            "boeing": "BA",
-            # Technology
-            "ibm": "IBM",
-            "salesforce": "CRM",
-            "oracle": "ORCL",
-            "servicenow": "NOW",
-            "palantir": "PLTR",
-            # Industrials / Transport
+            "general dynamics": "GD", "boeing": "BA",
+            "ibm": "IBM", "salesforce": "CRM", "oracle": "ORCL",
+            "servicenow": "NOW", "palantir": "PLTR",
             "freightcar america": "RAIL", "freightcar": "RAIL",
             "trinity industries": "TRN", "trinity": "TRN",
             "greenbrier": "GBX", "greenbrier companies": "GBX",
-            "caterpillar": "CAT",
-            "deere": "DE", "john deere": "DE",
-            "ge": "GE", "ge aerospace": "GE",
-            "honeywell": "HON",
-            "union pacific": "UNP",
-            "ups": "UPS",
-            "fedex": "FDX",
-            # Consumer
+            "caterpillar": "CAT", "deere": "DE", "john deere": "DE",
+            "ge": "GE", "ge aerospace": "GE", "honeywell": "HON",
+            "union pacific": "UNP", "ups": "UPS", "fedex": "FDX",
             "walmart": "WMT", "wal-mart": "WMT",
             "coca-cola": "KO", "coca cola": "KO", "coke": "KO",
             "pepsi": "PEP", "pepsico": "PEP",
             "procter": "PG", "procter & gamble": "PG", "p&g": "PG",
-            "costco": "COST",
-            "nike": "NKE",
-            "home depot": "HD",
+            "costco": "COST", "nike": "NKE", "home depot": "HD",
             "lowe's": "LOW", "lowes": "LOW",
             "mcdonald's": "MCD", "mcdonalds": "MCD",
-            "starbucks": "SBUX",
-            "disney": "DIS", "walt disney": "DIS",
+            "starbucks": "SBUX", "disney": "DIS", "walt disney": "DIS",
             "target": "TGT",
             "tjx": "TJX", "tj maxx": "TJX", "t.j. maxx": "TJX", "marshalls": "TJX",
             "ross stores": "ROST", "ross": "ROST",
-            "dollar general": "DG",
-            "dollar tree": "DLTR",
-            # Beauty / Personal Care
+            "dollar general": "DG", "dollar tree": "DLTR",
             "ulta": "ULTA", "ulta beauty": "ULTA",
             "elf beauty": "ELF", "e.l.f.": "ELF", "e.l.f. beauty": "ELF",
             "coty": "COTY",
-            "estee lauder": "EL", "este lauder": "EL", "lauder": "EL",
-            # Utilities
-            "duke energy": "DUK",
-            "southern company": "SO",
-            "vistra": "VST",
-            # REITs
-            "american tower": "AMT",
-            "prologis": "PLD",
-            "equinix": "EQIX",
-            "simon property": "SPG",
-            # Materials
+            "estee lauder": "EL", "estée lauder": "EL", "lauder": "EL",
+            "duke energy": "DUK", "southern company": "SO", "vistra": "VST",
+            "american tower": "AMT", "prologis": "PLD",
+            "equinix": "EQIX", "simon property": "SPG",
             "freeport": "FCX", "freeport-mcmoran": "FCX", "freeport mcmoran": "FCX",
-            "newmont": "NEM",
-            "nucor": "NUE",
-            "air products": "APD",
-            "linde": "LIN",
-            # Telecom
-            "at&t": "T", "att": "T",
-            "verizon": "VZ",
-            "t-mobile": "TMUS",
-            # Mega-cap Tech (Big 7)
+            "newmont": "NEM", "nucor": "NUE",
+            "air products": "APD", "linde": "LIN",
+            "at&t": "T", "att": "T", "verizon": "VZ", "t-mobile": "TMUS",
             "apple": "AAPL", "iphone": "AAPL", "tim cook": "AAPL",
             "microsoft": "MSFT", "satya nadella": "MSFT", "azure": "MSFT",
             "alphabet": "GOOGL", "google": "GOOGL", "sundar pichai": "GOOGL", "gemini": "GOOGL",
@@ -496,66 +452,39 @@ class NYSEReferenceDB:
             "amazon": "AMZN", "aws": "AMZN", "andy jassy": "AMZN",
             "netflix": "NFLX",
             "tesla": "TSLA", "elon musk": "TSLA", "elon": "TSLA",
-            # More Tech / Software
-            "adobe": "ADBE",
-            "intuit": "INTU", "turbotax": "INTU",
-            "synopsys": "SNPS",
-            "cadence": "CDNS",
-            "workday": "WDAY",
-            "atlassian": "TEAM", "jira": "TEAM",
-            "hubspot": "HUBS",
-            "uber": "UBER",
+            "adobe": "ADBE", "intuit": "INTU", "turbotax": "INTU",
+            "synopsys": "SNPS", "cadence": "CDNS",
+            "workday": "WDAY", "atlassian": "TEAM", "jira": "TEAM",
+            "hubspot": "HUBS", "uber": "UBER",
             "super micro": "SMCI", "supermicro": "SMCI",
             "shopify": "SHOP",
-            # Cybersecurity
             "palo alto": "PANW", "palo alto networks": "PANW",
-            "crowdstrike": "CRWD",
-            "fortinet": "FTNT",
-            "zscaler": "ZS",
-            "sentinelone": "S",
-            # Cloud / Data
-            "snowflake": "SNOW",
-            "datadog": "DDOG",
-            "cloudflare": "NET",
-            "mongodb": "MDB",
-            "roblox": "RBLX",
-            "snap": "SNAP", "snapchat": "SNAP",
+            "crowdstrike": "CRWD", "fortinet": "FTNT",
+            "zscaler": "ZS", "sentinelone": "S",
+            "snowflake": "SNOW", "datadog": "DDOG",
+            "cloudflare": "NET", "mongodb": "MDB",
+            "roblox": "RBLX", "snap": "SNAP", "snapchat": "SNAP",
             "roku": "ROKU",
-            # Crypto-adjacent
-            "coinbase": "COIN",
-            "microstrategy": "MSTR",
+            "coinbase": "COIN", "microstrategy": "MSTR",
             "riot": "RIOT", "riot platforms": "RIOT",
-            "marathon digital": "MARA",
-            "robinhood": "HOOD",
-            # Fintech
+            "marathon digital": "MARA", "robinhood": "HOOD",
             "paypal": "PYPL",
             "block": "SQ", "square": "SQ", "cash app": "SQ", "jack dorsey": "SQ",
-            "sofi": "SOFI",
-            "schwab": "SCHW", "charles schwab": "SCHW",
-            "affirm": "AFRM",
-            "doordash": "DASH",
-            "lyft": "LYFT",
-            # Biotech additions
-            "moderna": "MRNA",
-            "biontech": "BNTX",
-            "regeneron": "REGN",
-            "vertex": "VRTX",
+            "sofi": "SOFI", "schwab": "SCHW", "charles schwab": "SCHW",
+            "affirm": "AFRM", "doordash": "DASH", "lyft": "LYFT",
+            "moderna": "MRNA", "biontech": "BNTX",
+            "regeneron": "REGN", "vertex": "VRTX",
             "novo nordisk": "NVO", "ozempic": "NVO", "wegovy": "NVO",
             "structure therapeutics": "GPCR", "structure therap": "GPCR",
-            "viking therapeutics": "VKTX",
-            "revolution medicines": "RVMD",
-            # Lidar & Autonomous Driving
+            "viking therapeutics": "VKTX", "revolution medicines": "RVMD",
             "luminar": "LAZR", "luminar technologies": "LAZR",
             "velodyne": "VLDR",
             "innoviz": "INVZ", "innoviz technologies": "INVZ",
             "aeva": "AEVA", "aeva technologies": "AEVA",
-            "microvision": "MVIS",
-            "ouster": "OUST",
-            "cepton": "CPTN",
-            "mobileye": "MBLY",
+            "microvision": "MVIS", "ouster": "OUST",
+            "cepton": "CPTN", "mobileye": "MBLY",
             "aurora innovation": "AUR", "aurora": "AUR",
-            "waymo": "GOOGL",  # Waymo is Alphabet subsidiary
-            # Additional Semiconductors
+            "waymo": "GOOGL",
             "globalfoundries": "GFS", "global foundries": "GFS",
             "wolfspeed": "WOLF",
             "on semiconductor": "ON", "onsemi": "ON",
@@ -563,40 +492,27 @@ class NYSEReferenceDB:
             "stmicroelectronics": "STM", "stmicro": "STM",
             "microchip technology": "MCHP", "microchip": "MCHP",
             "lattice semiconductor": "LSCC", "lattice": "LSCC",
-            "monolithic power": "MPWR",
-            "silicon labs": "SLAB",
+            "monolithic power": "MPWR", "silicon labs": "SLAB",
             "rambus": "RMBS",
             "amkor": "AMKR", "amkor technology": "AMKR",
             "umc": "UMC", "united micro": "UMC",
             "skyworks": "SWKS", "skyworks solutions": "SWKS",
-            "indie semiconductor": "INDI",
-            "coherent": "COHR",
-            # Additional Cybersecurity
-            "cyberark": "CYBR",
-            "qualys": "QLYS",
-            "varonis": "VRNS",
-            "rapid7": "RPD",
-            # Additional Fintech
-            "toast": "TOST",
-            "upstart": "UPST",
+            "indie semiconductor": "INDI", "coherent": "COHR",
+            "cyberark": "CYBR", "qualys": "QLYS",
+            "varonis": "VRNS", "rapid7": "RPD",
+            "toast": "TOST", "upstart": "UPST",
             "lightspeed": "LSPD",
             "bill.com": "BILL", "bill holdings": "BILL",
             "marqeta": "MQ",
-            # Additional Clean Energy
-            "chargepoint": "CHPT",
-            "sunrun": "RUN",
-            "array technologies": "ARRY",
-            "shoals": "SHLS",
-            "maxeon": "MAXN",
-            # EVs / Autos
+            "chargepoint": "CHPT", "sunrun": "RUN",
+            "array technologies": "ARRY", "shoals": "SHLS", "maxeon": "MAXN",
             "general motors": "GM",
             "ford": "F", "ford motor": "F",
-            "rivian": "RIVN",
-            "lucid": "LCID",
+            "rivian": "RIVN", "lucid": "LCID",
             "devon": "DVN", "devon energy": "DVN",
         }
 
-        # "" SECTOR ' ETF CONTAGION MAP """""""""""""""""""""""""""""""""""""
+        # ── SECTOR → ETF CONTAGION MAP ─────────────────────────────────────
         self.sector_correlations: dict[str, list[str]] = {
             "Crypto":            ["IBIT", "BITO", "WGMI", "BITQ"],
             "Semiconductors":    ["SMH", "SOXX", "XSD", "PSI"],
@@ -616,12 +532,11 @@ class NYSEReferenceDB:
             "Telecom":           ["XLC", "VOX"],
         }
 
-        # "" SUPPLY CHAIN & DEPENDENCY GRAPH """""""""""""""""""""""""""""""""
-        # Maps a ticker to its key suppliers, customers, and peers
+        # ── SUPPLY CHAIN & DEPENDENCY GRAPH ─────────────────────────────────
         self.supply_chain: dict[str, dict[str, list[str]]] = {
             "NVDA": {
                 "suppliers": ["TSM", "ASML", "LRCX", "AMAT", "MU"],
-                "customers": ["ORCL", "EQIX", "VST"],  # Data center / power
+                "customers": ["ORCL", "EQIX", "VST"],
                 "peers": ["AMD", "INTC", "AVGO", "ARM"],
             },
             "AMD": {
@@ -696,16 +611,9 @@ class NYSEReferenceDB:
             },
         }
 
-        # "" MARKET STATE (live via yfinance " VIX, SPY, pre-market, earnings) ""
-        try:
-            # Running via "python nyse_impact_screener.py" (module is __main__).
-            from __main__ import LiveMarketState  # type: ignore
-        except Exception:
-            # Fallback for tests/imported module execution.
-            from nyse_impact_screener import LiveMarketState  # type: ignore
-
+        # ── MARKET STATE (live via yfinance — VIX, SPY, pre-market, earnings) ──
         self.live_market = LiveMarketState()
-        self.market_state = self.live_market.state  # shared reference " updates in-place
+        self.market_state = self.live_market.state  # shared reference — updates in-place
 
     def resolve_ticker(self, text: str) -> Optional[str]:
         """Resolve a company name or alias to its NYSE ticker."""
@@ -757,4 +665,3 @@ class NYSEReferenceDB:
         if self.market_state.get("is_pre_market"):
             return 1.15
         return 1.0
-

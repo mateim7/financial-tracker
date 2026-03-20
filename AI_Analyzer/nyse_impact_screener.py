@@ -156,7 +156,16 @@ async def broadcast_event(event):
         "insider_context":    event.insider_context,
         "ws_source":          event.ws_source,
     }
-    await _ws_broadcast(json.dumps(payload))
+    # Convert numpy/torch float32 values to native Python floats for JSON serialization
+    def _sanitize(obj):
+        if isinstance(obj, dict):
+            return {k: _sanitize(v) for k, v in obj.items()}
+        if isinstance(obj, (list, tuple)):
+            return [_sanitize(v) for v in obj]
+        if hasattr(obj, 'item'):  # numpy/torch scalar
+            return obj.item()
+        return obj
+    await _ws_broadcast(json.dumps(_sanitize(payload)))
 
 
 async def http_handler(request):

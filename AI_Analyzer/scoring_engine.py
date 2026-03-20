@@ -1,14 +1,13 @@
+"""
+Market Impact Scoring Engine for the NYSE Impact Screener.
+"""
+
 import re
 import time
-import torch
-import scipy.special
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
-from backend.algorithm.Direction import Direction
-from backend.algorithm.EventType import EventType
-from backend.algorithm.NYSEReferenceDB import NYSEReferenceDB
-from backend.algorithm.RawNewsEvent import RawNewsEvent
-from backend.algorithm.ScoredEvent import ScoredEvent
-from backend.algorithm.Urgency import Urgency
+
+from models import EventType, Direction, Urgency, RawNewsEvent, ScoredEvent
+from reference_db import NYSEReferenceDB
+
 
 class MarketImpactScoringEngine:
     """
@@ -137,12 +136,27 @@ class MarketImpactScoringEngine:
         (r"patent.*(?:invalid|upheld|ruling|granted|infring)", EventType.PATENT_RULING, 0.75),
     ]
 
+    BULLISH_KEYWORDS = {
+        "beat", "surge", "soar", "rally", "approval", "upgrade", "record",
+        "breakthrough", "growth", "bullish", "outperform", "buy", "strong",
+        "exceeds", "raises", "dividend", "accelerat", "optimis", "boom",
+        "profit", "recovery", "expand", "wins", "awarded", "above",
+        "positive", "upside", "best", "tops", "surprise", "blowout",
+        "hike", "buyback", "repurchas",
+    }
+
+    BEARISH_KEYWORDS = {
+        "miss", "plunge", "crash", "decline", "rejection", "downgrade",
+        "bankruptcy", "default", "warning", "layoff", "recall", "probe",
+        "investigation", "fraud", "loss", "bearish", "underperform", "sell",
+        "cuts", "slashes", "disappointing", "weak", "concern", "fear",
+        "sanctions", "tariff", "halt", "suspend", "breach", "hack",
+        "shortage", "crisis", "failure", "below", "worst", "downside",
+        "slash", "negative", "resign", "depart", "oust", "restrict",
+    }
+
     def __init__(self, reference_db: NYSEReferenceDB):
         self.db = reference_db
-        #FinBert
-        self.finbert_tokenizer = AutoTokenizer.from_pretrained("ProsusAI/finbert", use_fast=True)
-        self.finbert_model = AutoModelForSequenceClassification.from_pretrained("ProsusAI/finbert").to("cuda" if torch.cuda.is_available() else "cpu")
-        self.tokenizer_kwargs = {"padding": True, "truncation": True, "max_length": 512}
 
     def classify_event(self, headline: str, body: str = "") -> tuple[EventType, float]:
         text = f"{headline} {body}".lower()
@@ -154,18 +168,14 @@ class MarketImpactScoringEngine:
         return best_match
 
     def analyze_sentiment(self, headline: str, body: str = "") -> float:
-        text = f"{headline} {body}".strip()
-        if not text:
+        text = f"{headline} {body}".lower()
+        words = set(re.findall(r'\b\w+\b', text))
+        bull_count = len(words & self.BULLISH_KEYWORDS)
+        bear_count = len(words & self.BEARISH_KEYWORDS)
+        total = bull_count + bear_count
+        if total == 0:
             return 0.0
-        with torch.no_grad():
-            inputs = self.finbert_tokenizer(text, 
-                    return_tensors="pt", 
-                    **self.tokenizer_kwargs).to(self.finbert_model.device)
-            outputs = self.finbert_model(**inputs)
-            probs = torch.nn.functional.softmax(outputs.logits, dim=-1).cpu().numpy()[0]
-            sentiment_score = (probs[2] - probs[0])  # Positive - Negative
-
-        return sentiment_score
+        return round((bull_count - bear_count) / total, 3)
 
     def compute_impact_score(
         self,
@@ -191,7 +201,7 @@ class MarketImpactScoringEngine:
             default=0.8
         )
 
-        # Beta amplifier " high-beta stocks react more violently
+        # Beta amplifier — high-beta stocks react more violently
         max_beta = max((self.db.get_beta(t) for t in affected_tickers), default=1.0)
         beta_amp = 1.0 + max(0, (max_beta - 1.0) * 0.15)
 

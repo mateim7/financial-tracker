@@ -1,9 +1,22 @@
-﻿from dataclasses import asdict
+"""
+Alert Dispatcher for the NYSE Impact Screener.
+"""
+
+import json
+from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Awaitable, Callable, Optional
+
 from backend.algorithm.Direction import Direction
 from backend.algorithm.ScoredEvent import ScoredEvent
-import json
+
+
+class _NumpySafeEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if hasattr(obj, 'item'):
+            return obj.item()
+        return super().default(obj)
+
 
 class AlertDispatcher:
 
@@ -25,10 +38,10 @@ class AlertDispatcher:
     }
 
     URGENCY_SYMBOLS = {
-        "FLASH": "âš¡âš¡",
-        "HIGH": "âš¡",
-        "STANDARD": "â—",
-        "LOW": "â—‹",
+        "FLASH": "\u26a1\u26a1",
+        "HIGH": "\u26a1",
+        "STANDARD": "\u25cf",
+        "LOW": "\u25cb",
     }
 
     def __init__(self, broadcast_callback: Optional[Callable[[ScoredEvent], Awaitable[None]]] = None):
@@ -49,10 +62,10 @@ class AlertDispatcher:
     def format_direction_badge(self, direction: Direction) -> str:
         c = self.COLORS
         if direction == Direction.BULLISH:
-            return f"{c['GREEN']}â–² BULLISH{c['RESET']}"
+            return f"{c['GREEN']}\u25b2 BULLISH{c['RESET']}"
         elif direction == Direction.BEARISH:
-            return f"{c['RED']}â–¼ BEARISH{c['RESET']}"
-        return f"{c['WHITE']}â— NEUTRAL{c['RESET']}"
+            return f"{c['RED']}\u25bc BEARISH{c['RESET']}"
+        return f"{c['WHITE']}\u25cf NEUTRAL{c['RESET']}"
 
     def format_score_bar(self, score: int) -> str:
         filled = score // 5
@@ -65,7 +78,9 @@ class AlertDispatcher:
             color = self.COLORS["MEDIUM"]
         else:
             color = self.COLORS["LOW"]
-        return f"{color}{'â–ˆ' * filled}{'â–‘' * empty}{self.COLORS['RESET']} {score}/100"
+        block = '\u2588' * filled
+        shade = '\u2591' * empty
+        return f"{color}{block}{shade}{self.COLORS['RESET']} {score}/100"
 
     async def dispatch(self, event: ScoredEvent):
         severity = self.classify_severity(event.impact_score)
@@ -73,13 +88,14 @@ class AlertDispatcher:
 
         timestamp = datetime.fromtimestamp(event.timestamp, tz=timezone.utc)
         ts_str = timestamp.strftime("%H:%M:%S.%f")[:-3]
-        urgency_sym = self.URGENCY_SYMBOLS.get(event.urgency.value, "â—")
+        urgency_sym = self.URGENCY_SYMBOLS.get(event.urgency.value, "\u25cf")
 
+        line = '\u2501' * 76
         print()
-        print(f"  {c[severity]}{'â”' * 76}{c['RESET']}")
-        print(f"  {c[severity]}{urgency_sym} {severity} ALERT{c['RESET']}  â”‚  {ts_str} UTC  â”‚  "
-              f"Urgency: {event.urgency.value}  â”‚  Processed in {event.latency_ms:.1f}ms")
-        print(f"  {c[severity]}{'â”' * 76}{c['RESET']}")
+        print(f"  {c[severity]}{line}{c['RESET']}")
+        print(f"  {c[severity]}{urgency_sym} {severity} ALERT{c['RESET']}  \u2502  {ts_str} UTC  \u2502  "
+              f"Urgency: {event.urgency.value}  \u2502  Processed in {event.latency_ms:.1f}ms")
+        print(f"  {c[severity]}{line}{c['RESET']}")
         print()
         print(f"    {c['WHITE']}Headline:{c['RESET']}   {event.headline}")
         if event.brief:
@@ -105,14 +121,14 @@ class AlertDispatcher:
                 else:             label = "SPECULATIVE SELL"
                 color = c['RED']
             else:
-                label = "HOLD â€” NEUTRAL"
+                label = "HOLD -- NEUTRAL"
                 color = c['DIM']
-            print(f"    {c['WHITE']}Signal:{c['RESET']}     {color}{event.buy_signal} â€” {label} ({conf}% confidence){c['RESET']}")
+            print(f"    {c['WHITE']}Signal:{c['RESET']}     {color}{event.buy_signal} -- {label} ({conf}% confidence){c['RESET']}")
         if event.stock_availability:
             print(f"    {c['WHITE']}Platforms:{c['RESET']}")
             for ticker, info in event.stock_availability.items():
                 platforms = [p for p, ok in [("Revolut", info.get("revolut")), ("XTB", info.get("xtb"))] if ok]
-                status = "âœ“ " + ", ".join(platforms) if platforms else "âœ— Not on major platforms"
+                status = "\u2713 " + ", ".join(platforms) if platforms else "\u2717 Not on major platforms"
                 print(f"      {ticker}: {status} ({info.get('exchange', '?')})")
         print(f"    {c['WHITE']}Source:{c['RESET']}     {event.source} (Tier {event.source_tier})")
         print(f"    {c['WHITE']}Type:{c['RESET']}       {event.event_type.value}")
@@ -139,7 +155,7 @@ class AlertDispatcher:
             await self._broadcast_callback(event)
 
     async def _send_webhook(self, event: ScoredEvent):
-        dir_emoji = {"BULLISH": "ðŸŸ¢â–²", "BEARISH": "ðŸ”´â–¼", "NEUTRAL": "âšªâ—"}
+        dir_emoji = {"BULLISH": "\U0001f7e2\u25b2", "BEARISH": "\U0001f534\u25bc", "NEUTRAL": "\u26aa\u25cf"}
         event_dict = asdict(event)
         event_dict["event_type"] = event.event_type.value
         event_dict["direction"] = event.direction.value
@@ -147,28 +163,28 @@ class AlertDispatcher:
         payload = {
             "content": (
                 f"**{self.URGENCY_SYMBOLS.get(event.urgency.value, '')} "
-                f"{event.urgency.value} â€” Impact: {event.impact_score}/100**\n"
+                f"{event.urgency.value} -- Impact: {event.impact_score}/100**\n"
                 f"{dir_emoji.get(event.direction.value, '')} **{event.direction.value}**\n\n"
-                f"ðŸ“° {event.headline}\n"
-                f"ðŸ·ï¸ Tickers: {', '.join(event.affected_tickers) or 'MACRO'}\n"
-                f"ðŸ“Š Sectors: {', '.join(event.affected_sectors)}\n"
-                f"ðŸ“ˆ ETFs: {', '.join(event.affected_etfs)}\n"
-                f"ðŸ”— Supply Chain: {', '.join(event.supply_chain_exposure[:5]) or 'N/A'}\n"
-                f"ðŸ”¬ Type: {event.event_type.value} | Sentiment: {event.sentiment:+.3f}\n"
-                f"â±ï¸ Source: {event.source} | Latency: {event.latency_ms:.1f}ms"
+                f"\U0001f4f0 {event.headline}\n"
+                f"\U0001f3f7\ufe0f Tickers: {', '.join(event.affected_tickers) or 'MACRO'}\n"
+                f"\U0001f4ca Sectors: {', '.join(event.affected_sectors)}\n"
+                f"\U0001f4c8 ETFs: {', '.join(event.affected_etfs)}\n"
+                f"\U0001f517 Supply Chain: {', '.join(event.supply_chain_exposure[:5]) or 'N/A'}\n"
+                f"\U0001f52c Type: {event.event_type.value} | Sentiment: {event.sentiment:+.3f}\n"
+                f"\u23f1\ufe0f Source: {event.source} | Latency: {event.latency_ms:.1f}ms"
             ),
             "event_data": event_dict,
         }
-        print(f"    ðŸ“¡ Webhook payload prepared ({len(json.dumps(payload))} bytes)")
+        print(f"    \U0001f4e1 Webhook payload prepared ({len(json.dumps(payload, cls=_NumpySafeEncoder))} bytes)")
         print()
 
 
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-# SECTION 6: EXPANDED SIMULATED NEWS FEED â€” 25 Events Across All Sectors
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# *******************************************************************************
+# SECTION 6: EXPANDED SIMULATED NEWS FEED -- 25 Events Across All Sectors
+# *******************************************************************************
 
 DUMMY_NEWS_FEED: list[dict] = [
-    # â”€â”€ SEMICONDUCTORS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # -- SEMICONDUCTORS --
     {
         "source": "Reuters",
         "source_tier": 1,
@@ -200,7 +216,7 @@ DUMMY_NEWS_FEED: list[dict] = [
     {
         "source": "CNBC",
         "source_tier": 2,
-        "headline": "Intel CEO Pat Gelsinger resigns amid foundy struggles; board names interim leadership",
+        "headline": "Intel CEO Pat Gelsinger resigns amid foundry struggles; board names interim leadership",
         "body": "Intel CEO Pat Gelsinger has stepped down effective immediately after the board lost "
                 "confidence in the company's foundry turnaround plan. Intel's contract manufacturing "
                 "business has consistently missed yield targets. CFO David Zinsner and VP MJ Holthaus "
@@ -208,7 +224,7 @@ DUMMY_NEWS_FEED: list[dict] = [
         "tickers": ["INTC"],
     },
 
-    # â”€â”€ ENERGY â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # -- ENERGY --
     {
         "source": "Reuters",
         "source_tier": 1,
@@ -237,7 +253,7 @@ DUMMY_NEWS_FEED: list[dict] = [
         "tickers": ["FSLR", "ENPH"],
     },
 
-    # â”€â”€ FINANCIALS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # -- FINANCIALS --
     {
         "source": "Bloomberg",
         "source_tier": 1,
@@ -266,7 +282,7 @@ DUMMY_NEWS_FEED: list[dict] = [
         "tickers": ["V"],
     },
 
-    # â”€â”€ HEALTHCARE / PHARMA â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # -- HEALTHCARE / PHARMA --
     {
         "source": "Reuters",
         "source_tier": 1,
@@ -289,14 +305,14 @@ DUMMY_NEWS_FEED: list[dict] = [
     {
         "source": "Benzinga",
         "source_tier": 2,
-        "headline": "UnitedHealth Group CEO under DOJ investigation for insider trading â€” shares halted",
+        "headline": "UnitedHealth Group CEO under DOJ investigation for insider trading -- shares halted",
         "body": "The Department of Justice has opened a criminal investigation into UnitedHealth "
                 "Group's CEO for alleged insider trading ahead of a major acquisition announcement. "
                 "Trading in UNH shares has been halted pending further information.",
         "tickers": ["UNH"],
     },
 
-    # â”€â”€ DEFENSE / AEROSPACE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # -- DEFENSE / AEROSPACE --
     {
         "source": "Reuters",
         "source_tier": 1,
@@ -316,11 +332,11 @@ DUMMY_NEWS_FEED: list[dict] = [
         "tickers": ["BA"],
     },
 
-    # â”€â”€ MACRO EVENTS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # -- MACRO EVENTS --
     {
         "source": "BLS",
         "source_tier": 1,
-        "headline": "CPI rises 0.6% in March, hotter than expected â€” core inflation surges to 4.1%",
+        "headline": "CPI rises 0.6% in March, hotter than expected -- core inflation surges to 4.1%",
         "body": "The Bureau of Labor Statistics reported the Consumer Price Index rose 0.6% in March, "
                 "well above the 0.3% consensus. Core CPI hit 4.1% year-over-year, raising fears "
                 "the Fed will maintain hawkish stance longer than markets anticipated.",
@@ -338,14 +354,14 @@ DUMMY_NEWS_FEED: list[dict] = [
     {
         "source": "BLS",
         "source_tier": 1,
-        "headline": "Nonfarm payrolls surge by 353K in January, crushing 180K estimate â€” wages rise 0.6%",
+        "headline": "Nonfarm payrolls surge by 353K in January, crushing 180K estimate -- wages rise 0.6%",
         "body": "The U.S. economy added 353,000 jobs in January, nearly double the consensus forecast. "
                 "Average hourly earnings rose 0.6%, also above expectations. The unemployment rate "
                 "held at 3.7%. Markets repriced rate cut expectations sharply.",
         "tickers": [],
     },
 
-    # â”€â”€ MATERIALS / MINING â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # -- MATERIALS / MINING --
     {
         "source": "Bloomberg",
         "source_tier": 1,
@@ -356,7 +372,7 @@ DUMMY_NEWS_FEED: list[dict] = [
         "tickers": ["FCX"],
     },
 
-    # â”€â”€ UTILITIES / DATA CENTERS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # -- UTILITIES / DATA CENTERS --
     {
         "source": "Reuters",
         "source_tier": 1,
@@ -368,7 +384,7 @@ DUMMY_NEWS_FEED: list[dict] = [
         "tickers": ["VST"],
     },
 
-    # â”€â”€ REITs â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # -- REITs --
     {
         "source": "Benzinga",
         "source_tier": 2,
@@ -380,7 +396,7 @@ DUMMY_NEWS_FEED: list[dict] = [
         "tickers": ["EQIX"],
     },
 
-    # â”€â”€ GEOPOLITICAL â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # -- GEOPOLITICAL --
     {
         "source": "Reuters",
         "source_tier": 1,
@@ -392,7 +408,7 @@ DUMMY_NEWS_FEED: list[dict] = [
         "tickers": [],
     },
 
-    # â”€â”€ CONSUMER â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # -- CONSUMER --
     {
         "source": "Benzinga",
         "source_tier": 2,
@@ -403,11 +419,11 @@ DUMMY_NEWS_FEED: list[dict] = [
         "tickers": ["WMT"],
     },
 
-    # â”€â”€ CYBER / TECH â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # -- CYBER / TECH --
     {
         "source": "Bloomberg",
         "source_tier": 1,
-        "headline": "Massive cyberattack hits AT&T â€” 70M customer records exposed, FCC launches probe",
+        "headline": "Massive cyberattack hits AT&T -- 70M customer records exposed, FCC launches probe",
         "body": "AT&T disclosed a major data breach affecting approximately 70 million current and "
                 "former customers. Social security numbers, account details, and passcodes were "
                 "compromised. The FCC has opened a formal investigation. AT&T faces potential "
@@ -415,7 +431,7 @@ DUMMY_NEWS_FEED: list[dict] = [
         "tickers": ["T"],
     },
 
-    # â”€â”€ LOW NOISE â€” Should score low â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # -- LOW NOISE -- Should score low --
     {
         "source": "Twitter/X",
         "source_tier": 3,
@@ -425,10 +441,3 @@ DUMMY_NEWS_FEED: list[dict] = [
         "tickers": ["NKE"],
     },
 ]
-
-
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-# SECTION 7: MAIN ENGINE ORCHESTRATOR
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-
-

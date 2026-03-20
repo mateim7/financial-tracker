@@ -1,11 +1,16 @@
-import asyncio
-import os
+"""
+Stock Availability Checker for the NYSE Impact Screener.
+"""
+
 import time
+import os
+import asyncio
+
 
 class StockAvailabilityChecker:
     """Checks live prices via yfinance and broker availability against real ticker lists."""
 
-    # "" Revolut EU " ~2,200+ US stocks (sourced from community-maintained lists + official app)
+    # ── Revolut EU — ~2,200+ US stocks (sourced from community-maintained lists + official app)
     # Updated March 2025. Covers S&P 500, NASDAQ-100, and popular mid/small-caps.
     REVOLUT_TICKERS = {
         # Mega-cap & large-cap (S&P 500 core)
@@ -124,45 +129,45 @@ class StockAvailabilityChecker:
         # X-Z
         "X", "XEL", "XOM", "XPEV", "XRX", "XYL", "YETI", "YPF", "YUM", "YUMC",
         "Z", "ZBH", "ZBRA", "ZI", "ZION", "ZM", "ZS", "ZTO", "ZTS",
-        # "" Additional Semiconductors & Chip Equipment ""
+        # ── Additional Semiconductors & Chip Equipment ──
         "ACLS", "AEHR", "ALGM", "AMKR", "ASX", "ATOM", "CEVA", "COHU", "DIOD",
         "FORM", "GFS", "INDI", "IPGP", "LSCC", "MKSI", "MTSI", "MXL", "NXPI",
         "OUST", "POWI", "RMBS", "SITM", "SLAB", "SMTC", "STM", "UCTT", "UMC",
         "WOLF",
-        # "" Lidar & Autonomous Driving ""
+        # ── Lidar & Autonomous Driving ──
         "AEVA", "AUR", "CPTN", "INVZ", "LAZR", "LIDR", "MBLY", "MVIS", "OUST",
-        # "" AI & Cloud Infrastructure ""
+        # ── AI & Cloud Infrastructure ──
         "AI", "ALTR", "APP", "BBAI", "BIGC", "CFLT", "DV", "ESTC", "GTLB",
         "HCP", "IOT", "MNDY", "NEWR", "PD", "RBRK", "S", "TENB",
         "ZI",
-        # "" Biotech & Pharma (mid/small cap) ""
+        # ── Biotech & Pharma (mid/small cap) ──
         "ACAD", "ALT", "ARWR", "BEAM", "BGNE", "CRSP", "CRNX", "DMTK", "DNLI",
         "DRNA", "EXAI", "FATE", "GPCR", "HALO", "IMVT", "IONS", "IRWD", "KRTX",
         "KYMR", "LEGN", "MGNX", "NBIX", "NTLA", "PCVX", "RARE", "RCKT", "RXRX",
         "TXG", "VKTX", "VRNA", "XENE",
-        # "" Defense & Aerospace ""
+        # ── Defense & Aerospace ──
         "AVAV", "BWXT", "HEI", "HII", "KTOS", "LHX", "PLTR", "RKLB",
         "TDG", "TRMB", "WWD",
-        # "" Clean Energy & Utilities ""
+        # ── Clean Energy & Utilities ──
         "ARRY", "BLDP", "CHPT", "CWEN", "DQ", "ENPH", "FSLR", "HASI", "MAXN",
         "NEP", "NOVA", "RUN", "SEDG", "SHLS", "SPWR",
-        # "" Fintech & Payments ""
+        # ── Fintech & Payments ──
         "AFRM", "BILL", "COIN", "FI", "FOUR", "GPN", "HUBS", "LC", "LSPD", "MKTX",
         "MQ", "PAYO", "RPAY", "SOFI", "TOST", "UPST", "XP",
-        # "" Cybersecurity ""
+        # ── Cybersecurity ──
         "CRWD", "CYBR", "FTNT", "NET", "OKTA", "PANW", "QLYS", "RPD", "S",
         "VRNS", "ZS",
-        # "" REITs & Real Estate ""
+        # ── REITs & Real Estate ──
         "AMT", "CCI", "DLR", "EQIX", "IRM", "PLD", "PSA", "SBAC", "SPG",
         "STAG", "VNO", "WELL",
-        # "" Mining & Commodities ""
+        # ── Mining & Commodities ──
         "ALB", "CLF", "FCX", "HBM", "LAC", "MP", "NEM",
         "SCCO", "TECK", "WPM",
-        # "" Crypto & Blockchain ""
+        # ── Crypto & Blockchain ──
         "RIOT", "MARA", "BITF", "CLSK", "HUT", "BTBT", "CIFR",
     }
 
-    # "" XTB " ~2,000+ US stock CFDs + real stocks (sourced from official equity-table.pdf)
+    # ── XTB — ~2,000+ US stock CFDs + real stocks (sourced from official equity-table.pdf)
     # Updated March 2025. Includes all S&P 500, NASDAQ-100, and broad mid-cap coverage.
     XTB_TICKERS = {
         # A
@@ -297,42 +302,42 @@ class StockAvailabilityChecker:
         # X-Z
         "X", "XEL", "XOM", "XPEL", "XPEV", "XRAY", "XRX", "XYL", "YETI", "YPF",
         "YUM", "YUMC", "Z", "ZBRA", "ZBH", "ZI", "ZION", "ZM", "ZS", "ZTO", "ZTS",
-        # "" Additional Semiconductors & Chip Equipment ""
+        # ── Additional Semiconductors & Chip Equipment ──
         "ACLS", "AEHR", "ALGM", "AMKR", "ASX", "ATOM", "CEVA", "COHU", "DIOD",
         "FORM", "GFS", "INDI", "IPGP", "LSCC", "MKSI", "MTSI", "MXL", "NXPI",
         "OUST", "POWI", "RMBS", "SITM", "SLAB", "SMTC", "STM", "UCTT", "UMC",
         "WOLF",
-        # "" Lidar & Autonomous Driving ""
+        # ── Lidar & Autonomous Driving ──
         "AEVA", "AUR", "CPTN", "INVZ", "LAZR", "LIDR", "MBLY", "MVIS", "OUST",
-        # "" AI & Cloud Infrastructure ""
+        # ── AI & Cloud Infrastructure ──
         "AI", "ALTR", "APP", "BBAI", "BIGC", "CFLT", "DV", "ESTC", "GTLB",
         "HCP", "IOT", "MNDY", "NEWR", "PD", "RBRK", "S", "TENB",
         "ZI",
-        # "" Biotech & Pharma (mid/small cap) ""
+        # ── Biotech & Pharma (mid/small cap) ──
         "ACAD", "ALT", "ARWR", "BEAM", "BGNE", "CRSP", "CRNX", "DMTK", "DNLI",
         "DRNA", "EXAI", "FATE", "GPCR", "HALO", "IMVT", "IONS", "IRWD", "KRTX",
         "KYMR", "LEGN", "MGNX", "NBIX", "NTLA", "PCVX", "RARE", "RCKT", "RXRX",
         "TXG", "VKTX", "VRNA", "XENE",
-        # "" Defense & Aerospace ""
+        # ── Defense & Aerospace ──
         "AVAV", "BWXT", "HEI", "HII", "KTOS", "LHX", "PLTR", "RKLB",
         "TDG", "TRMB", "WWD",
-        # "" Clean Energy & Utilities ""
+        # ── Clean Energy & Utilities ──
         "ARRY", "BLDP", "CHPT", "CWEN", "DQ", "ENPH", "FSLR", "HASI", "MAXN",
         "NEP", "NOVA", "RUN", "SEDG", "SHLS", "SPWR",
-        # "" Fintech & Payments ""
+        # ── Fintech & Payments ──
         "AFRM", "BILL", "COIN", "FI", "FOUR", "GPN", "HUBS", "LC", "LSPD", "MKTX",
         "MQ", "PAYO", "RPAY", "SOFI", "TOST", "UPST", "XP",
-        # "" Cybersecurity ""
+        # ── Cybersecurity ──
         "CRWD", "CYBR", "FTNT", "NET", "OKTA", "PANW", "QLYS", "RPD", "S",
         "VRNS", "ZS",
-        # "" Mining & Commodities ""
+        # ── Mining & Commodities ──
         "ALB", "CLF", "FCX", "HBM", "LAC", "MP", "NEM",
         "SCCO", "TECK", "WPM",
-        # "" Crypto & Blockchain ""
+        # ── Crypto & Blockchain ──
         "RIOT", "MARA", "BITF", "CLSK", "HUT", "BTBT", "CIFR",
     }
 
-    PRICE_TTL = 300  # seconds " re-fetch after 5 minutes
+    PRICE_TTL = 300  # seconds — re-fetch after 5 minutes
     _cache: dict = {}  # ticker -> {"data": {...}, "ts": float}
 
     def _is_fresh(self, ticker: str) -> bool:
@@ -341,7 +346,7 @@ class StockAvailabilityChecker:
 
     @staticmethod
     def _yf_symbol(ticker: str) -> str:
-        """Convert ticker to yfinance format. e.g. BRK.B ' BRK-B"""
+        """Convert ticker to yfinance format. e.g. BRK.B → BRK-B"""
         return ticker.replace(".", "-")
 
     async def check_tickers(self, tickers: list[str]) -> dict:
@@ -375,10 +380,10 @@ class StockAvailabilityChecker:
 
         def _fetch_one(ticker: str) -> tuple[str, dict]:
             try:
-                # "" Step 1: Real-time price from Finnhub (includes pre/post-market) ""
+                # ── Step 1: Real-time price from Finnhub (includes pre/post-market) ──
                 fh_quote = _fetch_finnhub_quote(ticker)
 
-                # "" Step 2: RVOL from yfinance (30-day volume history) ""
+                # ── Step 2: RVOL from yfinance (30-day volume history) ──
                 volume = None
                 rvol = None
                 exchange = ""
@@ -403,7 +408,7 @@ class StockAvailabilityChecker:
                 except Exception:
                     pass
 
-                # "" Step 3: Use Finnhub price if available, else fall back to yfinance ""
+                # ── Step 3: Use Finnhub price if available, else fall back to yfinance ──
                 if fh_quote and fh_quote["price"]:
                     final_price = fh_quote["price"]
                     final_change = fh_quote["change_pct"]
@@ -440,10 +445,3 @@ class StockAvailabilityChecker:
                 self._cache[ticker] = {"data": result, "ts": time.time()}
                 results[ticker] = result
         return results
-
-
-# *******************************************************************************
-# SEC FORM 4 INSIDER ACTIVITY " via Finnhub insider-transactions endpoint
-# *******************************************************************************
-
-

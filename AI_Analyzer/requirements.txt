@@ -47,6 +47,6 @@ yfinance==1.2.0
 spacy>=3.7.0
 supabase==2.28.2
 --extra-index-url https://download.pytorch.org/whl/cpu
-torch==2.2.2
+torch
 transformers
 scipy

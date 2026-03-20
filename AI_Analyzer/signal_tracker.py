@@ -1,8 +1,13 @@
-import asyncio
+"""
+Signal Outcome Tracker for the NYSE Impact Screener.
+"""
+
 import os
 import time
-from typing import Awaitable, Callable, Optional
-from backend.algorithm.StockAvailabilityChecker import StockAvailabilityChecker
+import asyncio
+
+from stock_checker import StockAvailabilityChecker
+
 
 class SignalOutcomeTracker:
     """
@@ -20,14 +25,9 @@ class SignalOutcomeTracker:
         "1w":  604800,
     }
 
-    def __init__(self, db: "EventDatabase",
-                 broadcast_callback: Optional[Callable[[], Awaitable[None]]] = None):
+    def __init__(self, db: "EventDatabase"):
         self.db = db
         self._running = False
-        self._broadcast_callback = broadcast_callback
-
-    def set_broadcast_callback(self, callback: Optional[Callable[[], Awaitable[None]]]):
-        self._broadcast_callback = callback
 
     def record_signal(self, event_id: str, ticker: str, signal: str,
                       confidence: int, entry_price: float):
@@ -120,7 +120,7 @@ class SignalOutcomeTracker:
                 )
                 updates += 1
                 print(f"  [Tracker] {sig['signal']} ${ticker} @ +{cp}: "
-                      f"${entry_price:.2f} ' ${current_price:.2f} ({pct:+.2f}%) = {outcome}")
+                      f"${entry_price:.2f} → ${current_price:.2f} ({pct:+.2f}%) = {outcome}")
 
         if updates:
             # Broadcast updated stats to dashboard
@@ -129,6 +129,7 @@ class SignalOutcomeTracker:
     async def handle_track_request(self, msg: dict):
         """Handle a user-initiated track request from the dashboard."""
         import yfinance as yf
+        from server import _broadcast_signal_performance
 
         event_id = msg.get("event_id")
         ticker = msg.get("ticker")
@@ -165,15 +166,15 @@ class SignalOutcomeTracker:
             return
 
         self.record_signal(event_id, ticker, signal, confidence, round(price, 2))
-        await self._broadcast_stats()
+        await _broadcast_signal_performance()
 
     async def _broadcast_stats(self):
         """Send signal performance stats to all WS clients."""
-        if self._broadcast_callback is not None:
-            await self._broadcast_callback()
+        from server import _broadcast_signal_performance
+        await _broadcast_signal_performance()
 
     async def run_loop(self):
-        """Background loop " checks pending signals every 5 minutes."""
+        """Background loop — checks pending signals every 5 minutes."""
         self._running = True
         print("  [Tracker] Signal outcome tracker started (checking every 5 min)")
         while self._running:
@@ -182,10 +183,3 @@ class SignalOutcomeTracker:
             except Exception as e:
                 print(f"  [Tracker] Error checking signals: {e}")
             await asyncio.sleep(300)  # 5 minutes
-
-
-# *******************************************************************************
-# EVENT DATABASE
-# *******************************************************************************
-
-
