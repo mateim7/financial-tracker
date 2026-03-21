@@ -40,6 +40,21 @@ from backend.algorithm.NYSEImpactScreener import NYSEImpactScreener
 # Global set of connected WebSocket clients
 WS_CLIENTS: set = set()
 
+
+def _to_builtin(value):
+    """Recursively convert numpy scalars/containers to JSON-serializable Python types."""
+    if hasattr(value, "item") and callable(getattr(value, "item")):
+        try:
+            return value.item()
+        except Exception:
+            pass
+    if isinstance(value, dict):
+        return {k: _to_builtin(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_to_builtin(v) for v in value]
+    return value
+
+
 async def ws_handler(websocket):
     """Register a client, send initial state, then listen for track/untrack commands."""
     WS_CLIENTS.add(websocket)
@@ -101,10 +116,10 @@ async def _broadcast_signal_performance():
     stats = _SIGNAL_TRACKER_DB.get_signal_stats()
     recent = _SIGNAL_TRACKER_DB.get_recent_outcomes(20)
     tracked = _SIGNAL_TRACKER_DB.get_tracked_ids()
-    payload = json.dumps({
+    payload = json.dumps(_to_builtin({
         "type": "signal_performance", "stats": stats, "recent": recent,
         "tracked_ids": tracked,
-    })
+    }))
     await _ws_broadcast(payload)
 
 # Global references set in main() so WS handler can send state on connect
@@ -117,7 +132,7 @@ async def broadcast_market_state():
     """Push current market state (VIX, regime, SPY, etc.) to all WS clients."""
     if not WS_CLIENTS or _LIVE_MARKET_STATE is None:
         return
-    payload = json.dumps({"type": "market_state", **_LIVE_MARKET_STATE.state})
+    payload = json.dumps(_to_builtin({"type": "market_state", **_LIVE_MARKET_STATE.state}))
     await _ws_broadcast(payload)
 
 
@@ -156,7 +171,7 @@ async def broadcast_event(event):
         "insider_context":    event.insider_context,
         "ws_source":          event.ws_source,
     }
-    await _ws_broadcast(json.dumps(payload))
+    await _ws_broadcast(json.dumps(_to_builtin(payload)))
 
 
 async def http_handler(request):
@@ -198,9 +213,12 @@ async def signals_handler(request):
 async def events_handler(request):
     """Serves recent events from the DB for page reload / initial load."""
     db = request.app["db"]
-    limit = int(request.query.get("limit", 100))
-    max_age = int(request.query.get("max_age", 3600))  # default 1 hour
-    events = db.get_recent_events(min(limit, 500), max_age_seconds=min(max_age, 86400))
+    #limit = int(request.query.get("limit", 100))
+    #max_age = int(request.query.get("max_age", 3600))  # default 1 hour
+    #events = db.get_recent_events(min(limit, 500), max_age_seconds=min(max_age, 86400))
+    limit = 1000
+    max_age = 864000
+    events = db.get_recent_events(min(limit, 1000), max_age_seconds=min(max_age, 864000))
     return aiohttp_web.Response(
         text=json.dumps(events),
         content_type="application/json",

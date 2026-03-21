@@ -22,6 +22,21 @@ import csv
 from supabase import create_client, Client
 
 
+def _to_builtin(value):
+    """Recursively convert numpy scalars/containers to JSON-serializable Python types."""
+    # numpy scalar types (float32/int64/etc.) expose .item()
+    if hasattr(value, "item") and callable(getattr(value, "item")):
+        try:
+            return value.item()
+        except Exception:
+            pass
+    if isinstance(value, dict):
+        return {k: _to_builtin(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_to_builtin(v) for v in value]
+    return value
+
+
 class SupabaseDatabase:
     """Mirrors every method of EventDatabase (SQLite) but writes to Supabase PostgreSQL."""
 
@@ -116,26 +131,31 @@ class SupabaseDatabase:
     def insert(self, event):
         """Insert a scored event. Mirrors EventDatabase.insert()."""
         try:
+            affected_tickers = _to_builtin(event.affected_tickers)
+            affected_sectors = _to_builtin(event.affected_sectors)
+            affected_etfs = _to_builtin(event.affected_etfs)
+            stock_availability = _to_builtin(event.stock_availability)
             data = {
-                "event_id": event.event_id,
-                "timestamp": event.timestamp,
-                "headline": event.headline,
-                "source": event.source,
-                "source_tier": event.source_tier,
+                "event_id": _to_builtin(event.event_id),
+                "timestamp": _to_builtin(event.timestamp),
+                "headline": _to_builtin(event.headline),
+                "source": _to_builtin(event.source),
+                "source_tier": _to_builtin(event.source_tier),
                 "event_type": event.event_type.value,
                 "direction": event.direction.value,
-                "sentiment": event.sentiment,
-                "impact_score": event.impact_score,
+                "sentiment": _to_builtin(event.sentiment),
+                "impact_score": _to_builtin(event.impact_score),
                 "urgency": event.urgency.value,
-                "brief": event.brief,
-                "buy_signal": event.buy_signal,
-                "buy_confidence": event.buy_confidence,
-                "affected_tickers": json.dumps(event.affected_tickers),
-                "affected_sectors": json.dumps(event.affected_sectors),
-                "affected_etfs": json.dumps(event.affected_etfs),
-                "stock_availability": json.dumps(event.stock_availability),
-                "latency_ms": event.latency_ms,
+                "brief": _to_builtin(event.brief),
+                "buy_signal": _to_builtin(event.buy_signal),
+                "buy_confidence": _to_builtin(event.buy_confidence),
+                "affected_tickers": json.dumps(affected_tickers),
+                "affected_sectors": json.dumps(affected_sectors),
+                "affected_etfs": json.dumps(affected_etfs),
+                "stock_availability": json.dumps(stock_availability),
+                "latency_ms": _to_builtin(event.latency_ms),
             }
+            data = _to_builtin(data)
             self.client.table("events").upsert(data).execute()
         except Exception as e:
             print(f"  [Supabase] Insert error: {e}")

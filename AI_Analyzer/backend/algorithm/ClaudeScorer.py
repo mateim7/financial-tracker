@@ -1,18 +1,21 @@
-﻿import hashlib
+﻿import re
 import json
-import re
 import time
-from backend.algorithm.Direction import Direction
+import hashlib
+import math
+
 from backend.algorithm.EventType import EventType
+from backend.algorithm.Direction import Direction
 from backend.algorithm.ScoredEvent import ScoredEvent
 
+
 class ClaudeScorer:
-    # â”€â”€ Headlines that are almost never market-moving (skip Claude entirely) â”€â”€
+    #  Headlines that are almost never market-moving (skip Claude entirely) 
     SKIP_PATTERNS = re.compile(
         r'(?i)('
         r'\d+\s+(best|top|worst)\s+(stock|etf|fund|pick)|'       # "10 best stocks to buy"
         r'(morning|evening|daily|weekly)\s+(brief|recap|wrap|roundup)|'  # newsletters
-        r'(opinion|editorial|column|commentary)\s*[:\-â€“â€”]|'      # opinion pieces
+        r'(opinion|editorial|column|commentary)\s*[:\----]|'      # opinion pieces
         r'(things|reasons|tips|ways)\s+(to|you)|'                 # listicles
         r'should\s+you\s+(buy|sell|invest)|'                      # clickbait advice
         r'(what\s+is|how\s+to|beginner|explained|101)|'           # educational
@@ -27,12 +30,12 @@ class ClaudeScorer:
         self._db = db  # Reference to database for historical context
         api_key = os.environ.get("ANTHROPIC_API_KEY")
         if not api_key:
-            print("  [Claude] ANTHROPIC_API_KEY not set â€” falling back to keyword scoring")
+            print("  [Claude] ANTHROPIC_API_KEY not set -- falling back to keyword scoring")
             self.client = None
         else:
             import anthropic
             self.client = anthropic.AsyncAnthropic(api_key=api_key)
-            print("  [Claude] AsyncAnthropic loaded â€” truly async scoring enabled")
+            print("  [Claude] AsyncAnthropic loaded -- truly async scoring enabled")
 
         # Token usage tracking
         self._total_input_tokens = 0
@@ -40,11 +43,11 @@ class ClaudeScorer:
         self._total_calls = 0
         self._calls_skipped = 0
 
-        # Recent headline cache â€” avoid calling Claude for very similar headlines
+        # Recent headline cache -- avoid calling Claude for very similar headlines
         self._recent_headline_hashes: dict[str, float] = {}  # hash -> timestamp
         self._recent_headlines_semantic: dict[str, tuple[set, float]] = {}  # headline -> (ngrams, timestamp)
 
-        # Calibration cache â€” refreshed every 30 min from signal outcomes DB
+        # Calibration cache -- refreshed every 30 min from signal outcomes DB
         self._calibration_cache: str = ""
         self._calibration_ts: float = 0
 
@@ -269,7 +272,7 @@ class ClaudeScorer:
         if scored.impact_score < 40:
             return scored
 
-        # â”€â”€ Pre-Claude skip checks (saves tokens) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        #  Pre-Claude skip checks (saves tokens) 
         skip_reason = self._should_skip(headline, scored)
         if skip_reason:
             self._calls_skipped += 1
@@ -294,7 +297,7 @@ class ClaudeScorer:
         # Fetch historical context for these tickers
         historical_ctx = self._get_historical_context(scored.affected_tickers)
 
-        # Build insider activity context for Claude â€” grouped by ticker with clear boundaries
+        # Build insider activity context for Claude -- grouped by ticker with clear boundaries
         insider_parts = []
         if scored.insider_activity:
             for t, txs in scored.insider_activity.items():
@@ -302,8 +305,8 @@ class ClaudeScorer:
                 for tx in txs[:3]:  # top 3 per ticker by value
                     val_str = f"${tx['value']:,.0f}" if tx['value'] else "N/A"
                     tx_lines.append(
-                        f"    - {tx['name']} ({tx['title']}) â€” {tx['type']} â€” "
-                        f"{tx['shares']:,} shares worth {val_str} â€” {tx['days_ago']}d ago"
+                        f"    - {tx['name']} ({tx['title']}) -- {tx['type']} -- "
+                        f"{tx['shares']:,} shares worth {val_str} -- {tx['days_ago']}d ago"
                         f"{' [C-SUITE]' if tx['is_csuite'] else ''}"
                     )
                 insider_parts.append(f"  [{t}] insider filings:\n" + "\n".join(tx_lines))
@@ -342,7 +345,7 @@ Return JSON with these exact fields:
   "direction": "BULLISH" or "BEARISH" or "NEUTRAL",
   "brief": one sentence summary of the market impact,
   "buy_signal": "BUY" or "HOLD" or "SELL",
-  "buy_confidence": integer from 1 to 100. Be precise and granular â€” every value from 1 to 100 is valid. Do NOT round to multiples of 5 or 10. Think carefully and pick the exact number that reflects your conviction. Scale:
+  "buy_confidence": integer from 1 to 100. Be precise and granular -- every value from 1 to 100 is valid. Do NOT round to multiples of 5 or 10. Think carefully and pick the exact number that reflects your conviction. Scale:
     1-10: extremely low conviction, near noise
     11-25: weak signal, high uncertainty
     26-40: below average conviction, significant risk
@@ -353,63 +356,63 @@ Return JSON with these exact fields:
     85-94: high confidence, strong opportunity
     95-99: very high conviction, near certain
     100: absolute certainty (reserve only for unambiguous catalysts like FDA approval of blockbuster drug)
-  "reasoning": array of 2-3 short strings, each one specific reason why this is a BUY/SELL/HOLD. Be concrete â€” mention numbers, catalysts, or comparisons. E.g. ["Revenue beat of 12% vs estimates signals demand inflection", "Guidance raised â€” rare for this sector in current macro environment"],
+  "reasoning": array of 2-3 short strings, each one specific reason why this is a BUY/SELL/HOLD. Be concrete -- mention numbers, catalysts, or comparisons. E.g. ["Revenue beat of 12% vs estimates signals demand inflection", "Guidance raised -- rare for this sector in current macro environment"],
   "risk": one sentence on the single biggest risk that could invalidate this signal,
   "time_horizon": one of "intraday" or "swing (1-3d)" or "medium-term (1-4w)",
-  "correlated_moves": array of up to 4 ticker strings (beyond the primary tickers) that are likely to move in sympathy or inverse â€” e.g. sector peers, suppliers, competitors. Only include real NYSE/NASDAQ tickers.
-  "ticker_signals": object mapping each affected ticker AND each correlated_moves ticker to its own signal direction. CRITICAL: In macro/geopolitical events, different assets move in OPPOSITE directions due to capital rotation. You MUST analyze each ticker independently based on the ACTUAL content of the headline â€” not your assumptions about what "should" happen. Follow the COMMODITY CORRELATION CHAIN carefully:
-   - Oil RISING â†’ BEARISH airlines (fuel costs up), BULLISH energy (XOM, CVX, OXY)
-   - Oil FALLING â†’ BULLISH airlines (fuel costs down, DAL/UAL/AAL benefit), BEARISH energy
-   - Dollar RISING â†’ BEARISH exporters/commodities, BULLISH importers
-   - Interest rates RISING â†’ BEARISH growth/tech, BULLISH banks
-   - Gold RISING â†’ risk-off signal, BEARISH equities broadly
+  "correlated_moves": array of up to 4 ticker strings (beyond the primary tickers) that are likely to move in sympathy or inverse -- e.g. sector peers, suppliers, competitors. Only include real NYSE/NASDAQ tickers.
+  "ticker_signals": object mapping each affected ticker AND each correlated_moves ticker to its own signal direction. CRITICAL: In macro/geopolitical events, different assets move in OPPOSITE directions due to capital rotation. You MUST analyze each ticker independently based on the ACTUAL content of the headline -- not your assumptions about what "should" happen. Follow the COMMODITY CORRELATION CHAIN carefully:
+   - Oil RISING -> BEARISH airlines (fuel costs up), BULLISH energy (XOM, CVX, OXY)
+   - Oil FALLING -> BULLISH airlines (fuel costs down, DAL/UAL/AAL benefit), BEARISH energy
+   - Dollar RISING -> BEARISH exporters/commodities, BULLISH importers
+   - Interest rates RISING -> BEARISH growth/tech, BULLISH banks
+   - Gold RISING -> risk-off signal, BEARISH equities broadly
    READ THE HEADLINE DIRECTION CAREFULLY: "Oil Falls" means oil is GOING DOWN, which is BULLISH for airlines. "Oil Surges" means oil is GOING UP, which is BEARISH for airlines. Do NOT confuse the direction.
    Format: {{"TICKER": {{"signal": "BUY" or "SELL" or "HOLD", "confidence": 1-100}}}}. If all tickers move the same direction, they should still each have an entry. Never apply a blanket signal to all tickers without considering how the event specifically impacts each one.
-  "momentum_context": a short (1-2 sentence) explanation of how volume (RVOL) and price action align or conflict with the news signal. Example: "RVOL 2.3x confirms institutional buying pressure on bullish catalyst â€” high conviction move." or "Price down but RVOL low â€” market not reacting, signal may be noise." If RVOL data is unavailable, say "Volume data unavailable â€” signal based on news alone."
-  "insider_context": a short (1-2 sentence) explanation of how SEC Form 4 insider activity (above) influenced your final signal. Example: "CEO open-market buy of $2.5M within 3 days of bullish catalyst â€” strong insider conviction confirms BUY thesis." or "CFO sold $4M while news is bullish â€” insider exit divergence, capping conviction." If no insider data is available, return an empty string "".
+  "momentum_context": a short (1-2 sentence) explanation of how volume (RVOL) and price action align or conflict with the news signal. Example: "RVOL 2.3x confirms institutional buying pressure on bullish catalyst -- high conviction move." or "Price down but RVOL low -- market not reacting, signal may be noise." If RVOL data is unavailable, say "Volume data unavailable -- signal based on news alone."
+  "insider_context": a short (1-2 sentence) explanation of how SEC Form 4 insider activity (above) influenced your final signal. Example: "CEO open-market buy of $2.5M within 3 days of bullish catalyst -- strong insider conviction confirms BUY thesis." or "CFO sold $4M while news is bullish -- insider exit divergence, capping conviction." If no insider data is available, return an empty string "".
 }}
 
 CRITICAL RULES:
 
 1. "Don't shoot the messenger": If the article is a macroeconomic warning, market commentary, analyst note, research report, or rating change, DO NOT include the ticker of the investment bank or analyst firm that authored the report. Examples:
-- "Goldman Sachs warns of GDP drag" â†’ DO NOT include $GS.
-- "JPMorgan downgrades VMC" â†’ DO NOT include $JPM.
-- "Morgan Stanley expects rate cuts" â†’ DO NOT include $MS.
+- "Goldman Sachs warns of GDP drag" -> DO NOT include $GS.
+- "JPMorgan downgrades VMC" -> DO NOT include $JPM.
+- "Morgan Stanley expects rate cuts" -> DO NOT include $MS.
 
 2. "No hallucinated associations": ONLY include tickers for companies that are explicitly mentioned in the article OR are direct competitors/suppliers/customers of the primary company. Do NOT include tickers just because you associate them with a concept in the article. Examples of what NOT to do:
-- Article about "open-weight AI models" â†’ Do NOT add Hugging Face or any AI platform ticker that isn't mentioned.
-- Article about "cloud computing" â†’ Do NOT add random cloud companies that aren't discussed.
-- A person endorsing a company â†’ Do NOT add that person's company unless the article discusses impact on it.
+- Article about "open-weight AI models" -> Do NOT add Hugging Face or any AI platform ticker that isn't mentioned.
+- Article about "cloud computing" -> Do NOT add random cloud companies that aren't discussed.
+- A person endorsing a company -> Do NOT add that person's company unless the article discusses impact on it.
 
-3. "Respect the tape": The live market data above shows how each stock is ACTUALLY trading right now. If a stock is up significantly (+3% or more) today, do NOT issue a SELL signal on it unless you have extremely high conviction (85%+) â€” you would be telling someone to short a stock with strong buying momentum, which is extremely dangerous. Conversely, if a stock is down significantly (-3% or more), be cautious about issuing a BUY signal. Price action reflects information you may not have. When the tape contradicts your thesis, default to HOLD or reduce confidence substantially.
+3. "Respect the tape": The live market data above shows how each stock is ACTUALLY trading right now. If a stock is up significantly (+3% or more) today, do NOT issue a SELL signal on it unless you have extremely high conviction (85%+) -- you would be telling someone to short a stock with strong buying momentum, which is extremely dangerous. Conversely, if a stock is down significantly (-3% or more), be cautious about issuing a BUY signal. Price action reflects information you may not have. When the tape contradicts your thesis, default to HOLD or reduce confidence substantially.
 
-4. "Tape Validation Matrix" â€” Cross-reference the news sentiment against BOTH price action AND volume (RVOL) to validate or invalidate signals:
-   - BULLISH news + Price UP + RVOL HIGH (â‰¥1.5x): CONFIRMED momentum â€” increase confidence by 10-15 points. Institutional money is backing the move.
-   - BULLISH news + Price UP + RVOL LOW (<0.8x): WEAK confirmation â€” reduce confidence by 5-10 points. Move lacks volume conviction, could be retail-driven.
-   - BULLISH news + Price DOWN + RVOL HIGH: DIVERGENCE â€” default to HOLD. Smart money may be selling into the news. Flag as contrarian risk.
-   - BULLISH news + Price DOWN + RVOL LOW: NO REACTION â€” reduce confidence by 15-20 points. Market doesn't care about this catalyst.
-   - BEARISH news + Price DOWN + RVOL HIGH: CONFIRMED selloff â€” increase confidence for SELL. Institutional distribution confirmed.
+4. "Tape Validation Matrix" -- Cross-reference the news sentiment against BOTH price action AND volume (RVOL) to validate or invalidate signals:
+   - BULLISH news + Price UP + RVOL HIGH (1.5x): CONFIRMED momentum -- increase confidence by 10-15 points. Institutional money is backing the move.
+   - BULLISH news + Price UP + RVOL LOW (<0.8x): WEAK confirmation -- reduce confidence by 5-10 points. Move lacks volume conviction, could be retail-driven.
+   - BULLISH news + Price DOWN + RVOL HIGH: DIVERGENCE -- default to HOLD. Smart money may be selling into the news. Flag as contrarian risk.
+   - BULLISH news + Price DOWN + RVOL LOW: NO REACTION -- reduce confidence by 15-20 points. Market doesn't care about this catalyst.
+   - BEARISH news + Price DOWN + RVOL HIGH: CONFIRMED selloff -- increase confidence for SELL. Institutional distribution confirmed.
    - BEARISH news + Price DOWN + RVOL LOW: Orderly decline, may be priced in. Moderate confidence.
-   - BEARISH news + Price UP + RVOL HIGH: DIVERGENCE â€” default to HOLD. Market disagrees with the bearish thesis.
+   - BEARISH news + Price UP + RVOL HIGH: DIVERGENCE -- default to HOLD. Market disagrees with the bearish thesis.
    - BEARISH news + Price UP + RVOL LOW: Ignore the dip-buyer noise, but don't fight confirmed uptrend.
 
-5. "The C-Suite Multiplier" â€” If the news is BULLISH and the SEC Form 4 data above shows a significant (> $250,000) Open-Market BUY from a C-Level executive (CEO, CFO, COO, President) within the last 14 days, this is a "Holy Grail" setup. Upgrade buy_confidence heavily to 85-100 range. C-suite insiders buying with their own money on the open market, timed with a bullish catalyst, is one of the strongest confirming signals in finance.
+5. "The C-Suite Multiplier" -- If the news is BULLISH and the SEC Form 4 data above shows a significant (> $250,000) Open-Market BUY from a C-Level executive (CEO, CFO, COO, President) within the last 14 days, this is a "Holy Grail" setup. Upgrade buy_confidence heavily to 85-100 range. C-suite insiders buying with their own money on the open market, timed with a bullish catalyst, is one of the strongest confirming signals in finance.
 
-6. "The Contrarian Red Flag" â€” If the news is BULLISH but the SEC Form 4 data shows massive (> $500,000) Open-Market SELLS from C-suite or multiple insiders, this is an "Insider Exit Divergence." Cap buy_confidence at 60 maximum, and add a warning in the insider_context about insider selling contradicting the bullish narrative. Insiders know their company better than any analyst â€” if they're dumping while headlines are positive, respect their actions over the words.
+6. "The Contrarian Red Flag" -- If the news is BULLISH but the SEC Form 4 data shows massive (> $500,000) Open-Market SELLS from C-suite or multiple insiders, this is an "Insider Exit Divergence." Cap buy_confidence at 60 maximum, and add a warning in the insider_context about insider selling contradicting the bullish narrative. Insiders know their company better than any analyst -- if they're dumping while headlines are positive, respect their actions over the words.
 
-7. "No Insider Cross-Contamination" â€” The SEC insider data above is grouped by ticker in [TICKER] brackets. Each insider is an executive of THAT specific company ONLY. Do NOT attribute one company's insider activity to a different company. For example, if [AI] shows "Thomas Siebel (CEO) sold $6.8M," that is the CEO of C3.ai ($AI) â€” it has ZERO relevance to Palantir ($PLTR) or any other ticker. Only apply insider data to the EXACT ticker it is filed under. If a ticker shows "None," it means that company has NO recent insider activity.
+7. "No Insider Cross-Contamination" -- The SEC insider data above is grouped by ticker in [TICKER] brackets. Each insider is an executive of THAT specific company ONLY. Do NOT attribute one company's insider activity to a different company. For example, if [AI] shows "Thomas Siebel (CEO) sold $6.8M," that is the CEO of C3.ai ($AI) -- it has ZERO relevance to Palantir ($PLTR) or any other ticker. Only apply insider data to the EXACT ticker it is filed under. If a ticker shows "None," it means that company has NO recent insider activity.
 
-8. "Symmetrical Volume Veto" â€” RVOL is the ultimate arbiter of institutional conviction for BOTH bullish AND bearish signals. If a ticker's RVOL < 0.8x, the market exhibits "Dead Tape" (no institutional participation). You MUST default to HOLD with confidence between 20-45 for that ticker. Do NOT issue BUY or SELL on dead tape. The ONLY exception is Tier-1 hard catalysts: unexpected Earnings Beat/Miss, unannounced M&A, FDA approval/rejection, or bankruptcy.
+8. "Symmetrical Volume Veto" -- RVOL is the ultimate arbiter of institutional conviction for BOTH bullish AND bearish signals. If a ticker's RVOL < 0.8x, the market exhibits "Dead Tape" (no institutional participation). You MUST default to HOLD with confidence between 20-45 for that ticker. Do NOT issue BUY or SELL on dead tape. The ONLY exception is Tier-1 hard catalysts: unexpected Earnings Beat/Miss, unannounced M&A, FDA approval/rejection, or bankruptcy.
 
-9. "Global Score Aggregator" â€” Your impact_score must be the mathematical average of the individual ticker_signals confidence scores, NOT a qualitative mood score of the headline text. If two tickers score 74 and 30, the impact_score must be 52, not 74.
+9. "Global Score Aggregator" -- Your impact_score must reflect the conviction-weighted composite of the individual ticker_signals confidence scores, NOT a qualitative mood score of the headline text. High-conviction signals should dominate over low-conviction peripheral tickers.
 
-10. "BUY on Red Tape" â€” NEVER issue a BUY on a stock that is currently DOWN. A falling price means the market is telling you something. Rules:
+10. "BUY on Red Tape" -- NEVER issue a BUY on a stock that is currently DOWN. A falling price means the market is telling you something. Rules:
    - Price DOWN more than -3%: HOLD, max confidence 30. This is a falling knife.
-   - Price DOWN -1% to -3% + RVOL HIGH (â‰¥1.5x): HOLD, max confidence 25. High volume selling = confirmed institutional distribution. This is the WORST setup for a BUY.
+   - Price DOWN -1% to -3% + RVOL HIGH (1.5x): HOLD, max confidence 25. High volume selling = confirmed institutional distribution. This is the WORST setup for a BUY.
    - Price DOWN -1% to -3% + RVOL NORMAL (0.8-1.5x): HOLD, max confidence 40. Declining on real participation.
-   - Price DOWN 0% to -1% + RVOL HIGH (â‰¥1.5x): HOLD, max confidence 50. Mild red but institutions may be distributing.
+   - Price DOWN 0% to -1% + RVOL HIGH (1.5x): HOLD, max confidence 50. Mild red but institutions may be distributing.
    - Price DOWN 0% to -1% + RVOL NORMAL: BUY allowed but cap confidence at 55.
-   There are NO exceptions â€” even Tier-1 catalysts (earnings beat, FDA approval) can be "sell the news" events where institutions dump into retail buying liquidity. The tape is always the final arbiter.
+   There are NO exceptions -- even Tier-1 catalysts (earnings beat, FDA approval) can be "sell the news" events where institutions dump into retail buying liquidity. The tape is always the final arbiter.
 
 Only include the tickers of companies, sectors, commodities, or ETFs that are actually AFFECTED by the news.
 
@@ -434,7 +437,7 @@ Only correct other scoring fields where automated scoring is clearly wrong. Retu
             call_cost = (call_in * 3.0 / 1_000_000) + (call_out * 15.0 / 1_000_000)
             total_cost = (self._total_input_tokens * 3.0 / 1_000_000) + (self._total_output_tokens * 15.0 / 1_000_000)
 
-            # Detect truncation â€” if stop_reason is "max_tokens", output was cut off
+            # Detect truncation -- if stop_reason is "max_tokens", output was cut off
             stop_reason = getattr(response, 'stop_reason', None)
             was_truncated = stop_reason == "max_tokens"
             trunc_tag = " [TRUNCATED!]" if was_truncated else ""
@@ -453,7 +456,7 @@ Only correct other scoring fields where automated scoring is clearly wrong. Retu
                 if text.startswith("json"):
                     text = text[4:]
 
-            # â”€â”€ Truncation recovery â”€â”€
+            #  Truncation recovery 
             # If the JSON was cut off mid-generation, try to salvage it by closing
             # open braces/brackets. This recovers partial but usable data.
             data = None
@@ -474,9 +477,9 @@ Only correct other scoring fields where automated scoring is clearly wrong. Retu
                     repaired += "}" * max(0, open_braces)
                     try:
                         data = json.loads(repaired)
-                        print(f"  [Claude] Truncation recovery succeeded â€” partial data extracted")
+                        print(f"  [Claude] Truncation recovery succeeded -- partial data extracted")
                     except json.JSONDecodeError:
-                        print(f"  [Claude] Truncation recovery failed â€” using automated scores")
+                        print(f"  [Claude] Truncation recovery failed -- using automated scores")
                 else:
                     raise
 
@@ -530,30 +533,63 @@ Only correct other scoring fields where automated scoring is clearly wrong. Retu
                 scored.momentum_context = str(data["momentum_context"])
             if data.get("insider_context"):
                 ic = str(data["insider_context"]).strip()
-                # Strip useless "no data" responses â€” frontend doesn't need them
+                # Strip useless "no data" responses -- frontend doesn't need them
                 if ic and "no recent insider" not in ic.lower() and "none" != ic.lower():
                     scored.insider_context = ic
 
-            # â”€â”€ FIRST-PASS SCORE AGGREGATOR â”€â”€
-            # Enforce Rule 9 immediately: impact_score = avg(ticker_signals confidences)
-            # so all downstream logic uses the corrected score, not Claude's raw guess.
+            # ── FIRST-PASS SCORE AGGREGATOR (Blended Claude + Conviction) ──
+            # Claude's impact_score is the anchor (news significance).
+            # Ticker conviction composite modifies it (market actionability).
+            # Divergence penalty if signals conflict. Breadth bonus for wide impact.
             if scored.ticker_signals:
-                confs = [sig.get("confidence", 50) for sig in scored.ticker_signals.values()]
-                enforced_score = round(sum(confs) / len(confs))
-                if enforced_score != scored.impact_score:
-                    print(f"  [Rule9] First-pass score correction: {scored.impact_score} â†’ {enforced_score} "
-                          f"(avg of {len(confs)} ticker confidences: {confs})")
-                    scored.impact_score = enforced_score
+                primary_set = set(scored.affected_tickers or [])
+                claude_score = scored.impact_score
+
+                total_w = 0.0
+                weighted_conf_sum = 0.0
+                buy_weight = 0.0
+                sell_weight = 0.0
+                for ticker, sig in scored.ticker_signals.items():
+                    conf = sig.get("confidence", 50)
+                    w = 2.0 if ticker in primary_set else 1.0
+                    weighted_conf_sum += conf * w
+                    total_w += w
+                    signal = sig.get("signal", "HOLD")
+                    if signal == "BUY":
+                        buy_weight += conf * w
+                    elif signal == "SELL":
+                        sell_weight += conf * w
+
+                if total_w > 0:
+                    avg_conviction = weighted_conf_sum / total_w
+                    directional_total = buy_weight + sell_weight
+                    if directional_total > 0:
+                        agreement = abs(buy_weight - sell_weight) / directional_total
+                    else:
+                        agreement = 0.5
+                    n_signals = len(scored.ticker_signals)
+                    breadth = min(1.0, n_signals / 6.0)
+
+                    raw_blend = claude_score * 0.6 + avg_conviction * 0.4
+                    adjusted = raw_blend * (0.7 + 0.3 * agreement) + breadth * 5
+                    enforced_score = max(1, min(100, round(adjusted)))
+
+                    if enforced_score != scored.impact_score:
+                        print(f"  [Rule9] Blended score: {scored.impact_score} -> {enforced_score} "
+                              f"(claude={claude_score}, conviction={avg_conviction:.0f}, "
+                              f"agreement={agreement:.2f}, breadth={breadth:.2f})")
+                        scored.impact_score = enforced_score
+                        scored.impact_score = enforced_score
 
         except Exception as e:
             print(f"  [Claude] Scoring error: {e}")
 
-        # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-        # POST-CLAUDE HARD ENFORCEMENT â€” overrides Claude when data contradicts
+        # 
+        # POST-CLAUDE HARD ENFORCEMENT -- overrides Claude when data contradicts
         # These are programmatic safety nets that cannot be ignored by the LLM.
-        # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+        # 
 
-        # â”€â”€ INSIDER RED FLAG ENFORCEMENT â”€â”€
+        #  INSIDER RED FLAG ENFORCEMENT 
         # If insiders are dumping heavily while Claude says BUY, cap confidence
         if scored.insider_activity and scored.buy_signal == "BUY":
             total_insider_sells = 0
@@ -570,13 +606,13 @@ Only correct other scoring fields where automated scoring is clearly wrong. Retu
                 scored.buy_confidence = min(scored.buy_confidence, 60)
                 if old_conf > 60:
                     print(f"  [Enforce] Insider Red Flag: ${total_insider_sells:,.0f} in insider sells "
-                          f"â†’ capped BUY confidence {old_conf} â†’ {scored.buy_confidence}")
+                          f"-> capped BUY confidence {old_conf} -> {scored.buy_confidence}")
                     if not scored.insider_context or "divergence" not in scored.insider_context.lower():
                         scored.insider_context = (
                             f"INSIDER EXIT DIVERGENCE: ${total_insider_sells:,.0f} in open-market insider "
                             f"sales detected in last 14 days while news is bullish. "
                             f"{'C-suite executives are among the sellers. ' if has_csuite_sell else ''}"
-                            f"Conviction capped â€” insiders know their company better than headlines."
+                            f"Conviction capped -- insiders know their company better than headlines."
                         )
                 # Also cap per-ticker signals
                 for tk, sig in scored.ticker_signals.items():
@@ -588,17 +624,17 @@ Only correct other scoring fields where automated scoring is clearly wrong. Retu
                 old_signal = scored.buy_signal
                 scored.buy_signal = "HOLD"
                 scored.buy_confidence = min(scored.buy_confidence, 45)
-                print(f"  [Enforce] Massive insider dump ${total_insider_sells:,.0f} â†’ downgraded {old_signal} â†’ HOLD")
+                print(f"  [Enforce] Massive insider dump ${total_insider_sells:,.0f} -> downgraded {old_signal} -> HOLD")
                 scored.insider_context = (
                     f"CRITICAL INSIDER EXIT: ${total_insider_sells:,.0f} in insider sales over 14 days. "
-                    f"Signal forcibly downgraded to HOLD â€” when C-suite dumps this aggressively "
+                    f"Signal forcibly downgraded to HOLD -- when C-suite dumps this aggressively "
                     f"while headlines are bullish, it's a classic retail trap."
                 )
                 for tk, sig in scored.ticker_signals.items():
                     if sig.get("signal") == "BUY":
                         scored.ticker_signals[tk] = {"signal": "HOLD", "confidence": min(sig.get("confidence", 45), 45)}
 
-        # â”€â”€ C-SUITE MULTIPLIER ENFORCEMENT â”€â”€
+        #  C-SUITE MULTIPLIER ENFORCEMENT 
         # If insiders are buying heavily alongside bullish news, boost confidence
         if scored.insider_activity and scored.buy_signal == "BUY":
             total_csuite_buys = 0
@@ -612,9 +648,9 @@ Only correct other scoring fields where automated scoring is clearly wrong. Retu
                 scored.buy_confidence = max(scored.buy_confidence, 85)
                 if old_conf < 85:
                     print(f"  [Enforce] C-Suite Multiplier: ${total_csuite_buys:,.0f} C-suite buys "
-                          f"â†’ boosted BUY confidence {old_conf} â†’ {scored.buy_confidence}")
+                          f"-> boosted BUY confidence {old_conf} -> {scored.buy_confidence}")
 
-        # â”€â”€ TAPE CONTRADICTION ENFORCEMENT â”€â”€
+        #  TAPE CONTRADICTION ENFORCEMENT 
         # Checks ALL tickers with signals (affected + correlated + ticker_signals)
         all_signal_tickers = set(scored.affected_tickers)
         all_signal_tickers.update(scored.ticker_signals.keys())
@@ -630,7 +666,7 @@ Only correct other scoring fields where automated scoring is clearly wrong. Retu
                 ticker_signal = ts.get("signal", scored.buy_signal if t in scored.affected_tickers else None)
                 ticker_conf = ts.get("confidence", scored.buy_confidence)
 
-                # â”€â”€ SELL on green stock: don't short a stock that's rising â”€â”€
+                #  SELL on green stock: don't short a stock that's rising 
                 if ticker_signal == "SELL" and change is not None and change > 0:
                     # Aggressive override for strong runners (+3%+), softer for mild green
                     if change >= 3.0:
@@ -640,14 +676,14 @@ Only correct other scoring fields where automated scoring is clearly wrong. Retu
                     else:
                         new_conf = min(ticker_conf, 50)
                     print(f"  [Enforce] Fighting the tape: SELL {t} at {change:+.2f}% "
-                          f"â†’ overriding to HOLD (conf {ticker_conf} â†’ {new_conf})")
+                          f"-> overriding to HOLD (conf {ticker_conf} -> {new_conf})")
                     if t in scored.ticker_signals:
                         scored.ticker_signals[t] = {"signal": "HOLD", "confidence": new_conf}
                     if t in scored.affected_tickers and scored.buy_signal == "SELL":
                         scored.buy_signal = "HOLD"
                         scored.buy_confidence = new_conf
 
-                # â”€â”€ Tier-1 catalyst exception (shared by BUY-on-red and Volume Veto) â”€â”€
+                #  Tier-1 catalyst exception (shared by BUY-on-red and Volume Veto) 
                 TIER1_CATALYSTS = {
                     "EARNINGS_BEAT", "EARNINGS_MISS", "FDA_APPROVAL", "FDA_REJECTION",
                     "MA_ANNOUNCED", "MA_COMPLETED", "MA_BLOCKED", "BANKRUPTCY",
@@ -655,9 +691,9 @@ Only correct other scoring fields where automated scoring is clearly wrong. Retu
                 }
                 is_tier1 = scored.event_type in TIER1_CATALYSTS if hasattr(scored, 'event_type') else False
 
-                # â”€â”€ BUY on red stock: don't buy a stock that's falling â”€â”€
-                # High RVOL on a red stock is WORSE â€” it confirms institutional distribution
-                # NO EXCEPTIONS â€” even Tier-1 catalysts (earnings, FDA) can be "sell the news"
+                #  BUY on red stock: don't buy a stock that's falling 
+                # High RVOL on a red stock is WORSE -- it confirms institutional distribution
+                # NO EXCEPTIONS -- even Tier-1 catalysts (earnings, FDA) can be "sell the news"
                 # events where institutions dump into retail buying liquidity
                 if ticker_signal == "BUY" and change is not None and change < 0:
                     if change <= -3.0:
@@ -682,24 +718,42 @@ Only correct other scoring fields where automated scoring is clearly wrong. Retu
                             # Mild red + normal volume = soft weakness
                             new_conf = min(ticker_conf, 55)
                         else:
-                            # Mild red + low volume â†’ volume veto handles this
+                            # Mild red + low volume -> volume veto handles this
                             new_conf = min(ticker_conf, 45)
                     print(f"  [Enforce] BUY on red tape: {t} at {change:+.2f}% RVOL {rvol}x "
-                          f"â†’ overriding to HOLD (conf {ticker_conf} â†’ {new_conf})")
+                          f"-> overriding to HOLD (conf {ticker_conf} -> {new_conf})")
                     if t in scored.ticker_signals:
                         scored.ticker_signals[t] = {"signal": "HOLD", "confidence": new_conf}
                     if t in scored.affected_tickers and scored.buy_signal == "BUY":
                         scored.buy_signal = "HOLD"
                         scored.buy_confidence = new_conf
 
-                # â”€â”€ SYMMETRICAL VOLUME VETO â”€â”€
-                # RVOL < 0.8x = Dead Tape â†’ force HOLD, cap 45, floor 20
+                # ── BEARISH DIRECTION + BUY CONTRADICTION ──
+                # If overall news is BEARISH and the stock price confirms (red),
+                # never recommend BUY — don't fight both the narrative and the tape.
+                if (scored.direction == Direction.BEARISH
+                        and ticker_signal == "BUY"
+                        and change is not None and change < 0):
+                    if change <= -1.0:
+                        new_conf = min(ticker_conf, 30)
+                    else:
+                        new_conf = min(ticker_conf, 40)
+                    print(f"  [Enforce] Bearish direction + red tape: {t} at {change:+.2f}% "
+                          f"with BEARISH news -> forced HOLD (conf {ticker_conf} -> {new_conf})")
+                    if t in scored.ticker_signals:
+                        scored.ticker_signals[t] = {"signal": "HOLD", "confidence": new_conf}
+                    if t in scored.affected_tickers and scored.buy_signal == "BUY":
+                        scored.buy_signal = "HOLD"
+                        scored.buy_confidence = new_conf
+
+                #  SYMMETRICAL VOLUME VETO
+                # RVOL < 0.8x = Dead Tape -> force HOLD, cap 45, floor 20
                 # Exception: Tier-1 hard catalysts (uses is_tier1 from above)
                 if rvol is not None and rvol < 0.8 and not is_tier1:
                     if ticker_signal in ("BUY", "SELL"):
                         new_conf = max(20, min(ticker_conf, 45))
                         print(f"  [Enforce] Symmetrical Volume Veto for {t}: RVOL {rvol}x < 0.8 "
-                              f"â†’ {ticker_signal} overridden to HOLD (conf {ticker_conf} â†’ {new_conf})")
+                              f"-> {ticker_signal} overridden to HOLD (conf {ticker_conf} -> {new_conf})")
                         if t in scored.ticker_signals:
                             scored.ticker_signals[t] = {"signal": "HOLD", "confidence": new_conf}
                         if t in scored.affected_tickers:
@@ -707,7 +761,7 @@ Only correct other scoring fields where automated scoring is clearly wrong. Retu
                             scored.buy_confidence = new_conf
                         if not scored.momentum_context or "dead tape" not in scored.momentum_context.lower():
                             scored.momentum_context = (
-                                f"Dead tape on {t}: RVOL {rvol}x â€” no institutional participation. "
+                                f"Dead tape on {t}: RVOL {rvol}x -- no institutional participation. "
                                 f"Price moves are noise, not conviction. Signal vetoed to HOLD."
                             )
 
@@ -739,7 +793,7 @@ Only correct other scoring fields where automated scoring is clearly wrong. Retu
 
     async def validate_buy(self, scored: ScoredEvent, corroborating: list[dict]) -> ScoredEvent:
         """Second Claude call to validate BUY signal using corroborating sources.
-        Uses Haiku for this simple yes/no task â€” ~20x cheaper than Sonnet."""
+        Uses Haiku for this simple yes/no task -- ~20x cheaper than Sonnet."""
         if not self.client or not corroborating:
             return scored
         headlines = "\n".join(f"- [{a['source']}] {a['headline']}" for a in corroborating[:3])
@@ -788,10 +842,3 @@ Return ONLY JSON:
         except Exception as e:
             print(f"  [Claude] Validation error: {e}")
         return scored
-
-
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-# STOCK AVAILABILITY CHECKER
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-
-

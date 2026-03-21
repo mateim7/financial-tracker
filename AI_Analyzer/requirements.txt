@@ -22,7 +22,7 @@ idna==3.11
 jiter==0.13.0
 multidict==6.7.1
 multitasking==0.0.12
-numpy==2.2.6
+numpy==1.26.4
 pandas==2.3.3
 peewee==4.0.1
 platformdirs==4.9.2
@@ -48,5 +48,5 @@ spacy>=3.7.0
 supabase==2.28.2
 --extra-index-url https://download.pytorch.org/whl/cpu
 torch==2.2.2
-transformers
+transformers==4.41.2
 scipy

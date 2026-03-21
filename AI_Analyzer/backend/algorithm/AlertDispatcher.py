@@ -5,6 +5,21 @@ from backend.algorithm.Direction import Direction
 from backend.algorithm.ScoredEvent import ScoredEvent
 import json
 
+
+def _to_builtin(value):
+    """Recursively convert numpy scalars/containers to JSON-serializable Python types."""
+    if hasattr(value, "item") and callable(getattr(value, "item")):
+        try:
+            return value.item()
+        except Exception:
+            pass
+    if isinstance(value, dict):
+        return {k: _to_builtin(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_to_builtin(v) for v in value]
+    return value
+
+
 class AlertDispatcher:
 
     CRITICAL_THRESHOLD = 80
@@ -140,11 +155,11 @@ class AlertDispatcher:
 
     async def _send_webhook(self, event: ScoredEvent):
         dir_emoji = {"BULLISH": "ðŸŸ¢â–²", "BEARISH": "ðŸ”´â–¼", "NEUTRAL": "âšªâ—"}
-        event_dict = asdict(event)
+        event_dict = _to_builtin(asdict(event))
         event_dict["event_type"] = event.event_type.value
         event_dict["direction"] = event.direction.value
         event_dict["urgency"] = event.urgency.value
-        payload = {
+        payload = _to_builtin({
             "content": (
                 f"**{self.URGENCY_SYMBOLS.get(event.urgency.value, '')} "
                 f"{event.urgency.value} â€” Impact: {event.impact_score}/100**\n"
@@ -158,7 +173,7 @@ class AlertDispatcher:
                 f"â±ï¸ Source: {event.source} | Latency: {event.latency_ms:.1f}ms"
             ),
             "event_data": event_dict,
-        }
+        })
         print(f"    ðŸ“¡ Webhook payload prepared ({len(json.dumps(payload))} bytes)")
         print()
 
